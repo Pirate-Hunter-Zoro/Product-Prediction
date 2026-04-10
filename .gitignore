@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 .vscode
 .claude
+.DS_Store
