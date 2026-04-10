@@ -4,3 +4,6 @@ __pycache__/
 .vscode
 .claude
 .DS_Store
+Amazon-M2-Session-Recommendation/
+log*/
+saved/

@@ -1,0 +1,20 @@
+USER_ID_FIELD: session_id # Row ID                                                                                                          
+ITEM_ID_FIELD: item_id # Target
+LIST_SUFFIX: _list  # Any field ending in '_list' is a sequence field                                                                                                                  
+MAX_ITEM_LIST_LENGTH: 50 # Self-explanatory - based on our data this is a good number
+                                                                                                                                      
+load_col:       
+  inter: ['session_id', 'item_id_list', 'item_id'] # Columns to load from .inter file
+
+benchmark_filename: ['train', 'valid', 'test']
+
+filter_inter_by_user_or_item: False # Do not filter out sessions/items with few interactions
+alias_of_item_id: ['item_id_list'] # Build vocabulary from all item occurrences (not just targets)
+
+metrics: ['MRR', 'Recall']
+topk: [100]                                                                                                                            
+valid_metric: 'MRR@100'  
+
+data_path: data/
+
+train_neg_sample_args: ~ # No negative sampling
