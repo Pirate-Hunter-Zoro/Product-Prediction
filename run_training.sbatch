@@ -24,6 +24,7 @@ eval "$(conda shell.bash hook)"
 # Conda often dislikes 'set -u'—use this safe pattern:
 set +u; conda activate "${CONDA_ENV}"; set -u || exit 10
 
+mkdir -p slurm_logs
 
 # Explicitly pass the memory limit to srun to resolve the conflict
 python scripts/preprocess.py
