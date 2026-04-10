@@ -35,6 +35,7 @@ def main():
             "item_id:token": split_df['next_item']                                                                                           
         }) 
         output_df.to_csv(inter_path, sep="\t", index=False)
+        print("Created .inter files...", flush=True)
 
 if __name__=="__main__":
     main()

@@ -7,3 +7,4 @@ __pycache__/
 Amazon-M2-Session-Recommendation/
 log*/
 saved/
+slurm_logs/

@@ -6,6 +6,7 @@ def main():
     parser.add_argument('--model', type=str, required=True)
     args = parser.parse_args()
     
+    print("Running recbole training...", flush=True)
     run_recbole(
         model=args.model,
         dataset='amazon_m2',
