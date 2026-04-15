@@ -44,23 +44,32 @@ COMPLETED
 [x] Verified pipeline works locally on 3000-row smoke test (GRU4Rec trained
     without crashing, metrics were 0 which is expected for tiny data)
 [x] Code pushed to GitHub, cloned on cluster, CSVs scp'd up
-[x] Conda env set up on cluster
+[x] Conda env set up on cluster (after several rounds of ~/.local shadowing
+    and pip writability quirks -- see GOTCHAS below for the full set of
+    landmines the final create_env.sh defuses)
+[x] Verified recbole imports from the conda env prefix under
+    PYTHONNOUSERSITE=1 (sanity check at end of create_env.sh)
 
 
 IN PROGRESS
 -----------
 [ ] Full-scale GRU4Rec training on cluster via Slurm
-    - Last error: ModuleNotFoundError: recbole, even though `which python`
-      pointed at the conda env. Root cause: create_env.sh was run with a
-      different conda than the sbatch (which does `module load Anaconda3/
-      2025.06-0`), so `conda activate amazon-m2-venv` in the job resolved
-      to a bare env at a different prefix than the one pip populated.
-    - Fix applied to create_env.sh: added `module purge` + `module load
-      Anaconda3/2025.06-0` before the conda shell hook, added `set -e`
-      after env creation, and appended a `python -c "import recbole;
-      import torch; ..."` sanity check at the end.
-    - Next: run create_env.sh on a login node, verify the sanity-check
-      line prints, then resubmit run_training.sbatch.
+    - Env is finally clean. Next action: sbatch run_training.sbatch, then
+      tail slurm_logs/training_out.txt to confirm recbole resolves inside
+      the conda env at job runtime, preprocess.py runs, and RecBole begins
+      training epochs.
+
+[ ] Pin a random seed in scripts/preprocess.py before running any second
+    baseline. Currently preprocess.py does sessions_df.sample(frac=1) with
+    no seed, so each sbatch submission re-splits the data differently,
+    which would make GRU4Rec vs NARM vs Novel comparisons meaningless.
+    Either seed the shuffle or run preprocess once and drop it from the
+    sbatch.
+
+[ ] (Hygiene, non-blocking) rm -rf ~/.local/lib/python3.10 on the cluster.
+    Earlier failed create_env.sh runs dumped a full torch+CUDA+recbole
+    stack there. Runtime is masked by PYTHONNOUSERSITE=1 in the sbatch,
+    but it's wasted disk and a future trap.
 
 
 REMAINING WORK
@@ -117,5 +126,17 @@ KNOWN ISSUES / GOTCHAS
 - RecBole's SequentialDataset.data_augmentation() wants a timestamp field; we
   bypass this by using pre-split files via benchmark_filename
 - ~/.local site-packages can override conda env — use PYTHONNOUSERSITE=1
+  at runtime AND on every pip install line (otherwise pip's
+  "already satisfied" check sees ~/.local stale copies and skips
+  installing into the env)
+- create_env.sh MUST do `module purge && module load Anaconda3/2025.06-0`
+  before the conda shell hook. Running it without the module activates a
+  different conda with a different envs_dirs, so the sbatch's
+  `conda activate amazon-m2-venv` ends up pointing at a different env
+  with the same name.
+- The "studies" shared filesystem reports False from os.access(path,
+  os.W_OK) even when writes actually succeed. Pip interprets that as "not
+  writable" and defaults to --user (i.e. ~/.local). Every pip install in
+  create_env.sh uses `--no-user` to force the install into the env anyway.
 - Mac dev only; actual training must run on the GPU cluster
 - 3.6M sessions + 1.4M items means OOM on laptop; always test with --nrows
