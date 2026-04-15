@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH -o slurm_logs/training_our.txt
+#SBATCH -o slurm_logs/training_out.txt
 #SBATCH -e slurm_logs/training_err.txt
 #SBATCH --gres=gpu:1
 
