@@ -1,0 +1,113 @@
+AMAZON-M2 NEXT PRODUCT RECOMMENDATION - PROJECT TODO
+========================================================
+
+PROJECT OVERVIEW
+----------------
+Final project for grad course. Task: next product recommendation on the
+Amazon-M2 session-based shopping dataset. Rubric: Novelty 20%, Implementation
+30%, Experiments 30%, Presentation 20%. Need 2-3 baselines + one novel method.
+Novelty matters more than outperformance.
+
+Dataset: ~3.6M training sessions, ~1.4M products, 6 locales (UK, DE, JP large;
+ES, FR, IT small). Sessions average ~4 items. Target metrics: MRR@100, Recall@100.
+Reference project (Amazon-M2-Session-Recommendation/) exists locally but gitignored.
+
+Framework: RecBole (PyTorch-based recommendation library). Baselines use
+built-in RecBole models; novel method will subclass SequentialRecommender.
+
+
+COMPLETED
+---------
+[x] Scanned repo, paper, and reference project
+[x] Data investigation in data_investigation.ipynb:
+    - Locale counts (UK 1.18M, DE 1.11M, JP 979K, IT 127K, FR 118K, ES 89K)
+    - Session length: mean 4.2, median 3, max 474, long-tail distribution
+[x] Picked two easiest baselines to implement: GRU4Rec and NARM
+[x] Decided to use RecBole for baselines + novel method (subclass approach)
+[x] scripts/preprocess.py - converts sessions_train.csv to RecBole .inter format
+    - Supports --nrows flag for small test runs
+    - Splits data 80/10/10 into train/valid/test
+    - Outputs to data/amazon_m2/amazon_m2.{train,valid,test}.inter
+[x] scripts/config.yaml - RecBole configuration
+    - USER_ID_FIELD: session_id, ITEM_ID_FIELD: item_id
+    - benchmark_filename: ['train', 'valid', 'test'] (pre-split files)
+    - alias_of_item_id: ['item_id_list'] (unified vocab across both fields)
+    - filter_inter_by_user_or_item: False
+    - train_neg_sample_args: ~ (CE loss needs no neg sampling)
+    - metrics: MRR, Recall; topk: 100; valid_metric: MRR@100
+[x] scripts/train.py - accepts --model arg, calls run_recbole()
+[x] create_env.sh - sets up conda env with PyTorch CUDA, recbole, ray[tune],
+    kmeans-pytorch, setuptools, numpy<2.0. Purges any existing env first.
+[x] run_training.sbatch - Slurm job script for cluster training
+    - Has PYTHONNOUSERSITE=1 to avoid ~/.local site-packages interference
+    - Prints which python + recbole path for debugging
+[x] Verified pipeline works locally on 3000-row smoke test (GRU4Rec trained
+    without crashing, metrics were 0 which is expected for tiny data)
+[x] Code pushed to GitHub, cloned on cluster, CSVs scp'd up
+[x] Conda env set up on cluster
+
+
+IN PROGRESS
+-----------
+[ ] Full-scale GRU4Rec training on cluster via Slurm
+    - Last error: pkg_resources ModuleNotFoundError (job was running
+      ~/.local recbole instead of the conda one). Fixed with PYTHONNOUSERSITE=1
+      and setuptools install. Need to pull + resubmit.
+
+
+REMAINING WORK
+--------------
+BASELINE EXPERIMENTS:
+[ ] Successfully train GRU4Rec on full dataset, record MRR@100 and Recall@100
+[ ] Duplicate sbatch for NARM (change --model arg), train and record metrics
+[ ] (Optional) Also run Popularity baseline for a weak-model reference point
+
+NOVEL METHOD:
+[ ] Design the novel contribution. Ideas to consider:
+    - Use product attributes (title, brand, price, desc) that baselines ignore
+      — the paper's Table 5 showed BERT embeddings alone didn't help, so there's
+      room for a smarter way to incorporate text/attributes
+    - Combine a popularity signal with the deep model (since popularity crushes
+      deep models on MRR in the paper)
+    - Something with the repeat-item pattern (~35% of sessions have repeats)
+    - Locale-aware routing or a lightweight cross-locale transfer mechanism
+    - Anything else that feels principled and testable
+[ ] Implement novel method as a RecBole SequentialRecommender subclass
+[ ] Train novel method on full dataset, record metrics
+
+COMPARISON / ANALYSIS:
+[ ] Build a results table: Popularity (if run), GRU4Rec, NARM, Novel method
+    with MRR@100 and Recall@100 (and maybe per-locale breakdowns)
+[ ] Ablation experiments on the novel method (what parts matter?)
+[ ] Qualitative analysis (example sessions + what each model predicts)
+
+DELIVERABLES:
+[ ] Write up the project report (LaTeX or Markdown)
+[ ] Prepare presentation slides if required
+[ ] Clean up code + README with run instructions
+
+
+FILES THAT MATTER
+-----------------
+scripts/preprocess.py       - Data preprocessing
+scripts/config.yaml         - RecBole config
+scripts/train.py            - Training entrypoint
+create_env.sh               - Environment setup
+run_training.sbatch         - Slurm job script
+data_investigation.ipynb    - Initial data exploration
+data/sessions_train.csv     - Raw session data (gitignored, scp'd to cluster)
+data/products_train.csv     - Raw product metadata (gitignored)
+Amazon-M2-Session-Recommendation/  - Reference implementation (gitignored)
+Amazon-M2.pdf               - Dataset paper
+Final project instruction.pdf - Course project spec
+
+
+KNOWN ISSUES / GOTCHAS
+----------------------
+- RecBole 1.2.0 needs numpy<2.0 (uses removed np.float_)
+- RecBole has undeclared deps: ray, kmeans-pytorch, setuptools (pkg_resources)
+- RecBole's SequentialDataset.data_augmentation() wants a timestamp field; we
+  bypass this by using pre-split files via benchmark_filename
+- ~/.local site-packages can override conda env — use PYTHONNOUSERSITE=1
+- Mac dev only; actual training must run on the GPU cluster
+- 3.6M sessions + 1.4M items means OOM on laptop; always test with --nrows

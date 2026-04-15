@@ -23,9 +23,12 @@ eval "$(conda shell.bash hook)"
 
 # Conda often dislikes 'set -u'—use this safe pattern:
 set +u; conda activate "${CONDA_ENV}"; set -u || exit 10
+export PYTHONNOUSERSITE=1
 
 mkdir -p slurm_logs
 
 # Explicitly pass the memory limit to srun to resolve the conflict
+which python
+python -c "import recbole; print(recbole.__file__)"
 python scripts/preprocess.py
 python scripts/train.py --model GRU4Rec
