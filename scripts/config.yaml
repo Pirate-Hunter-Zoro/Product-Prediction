@@ -2,7 +2,11 @@ USER_ID_FIELD: session_id # Row ID
 ITEM_ID_FIELD: item_id # Target
 LIST_SUFFIX: _list  # Any field ending in '_list' is a sequence field                                                                                                                  
 MAX_ITEM_LIST_LENGTH: 50 # Self-explanatory - based on our data this is a good number
-                                                                                                                                      
+
+# Batch sizes for training and testing
+train_batch_size: 256
+eval_batch_size: 128
+
 load_col:       
   inter: ['session_id', 'item_id_list', 'item_id'] # Columns to load from .inter file
 
