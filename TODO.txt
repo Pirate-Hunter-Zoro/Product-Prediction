@@ -50,9 +50,17 @@ COMPLETED
 IN PROGRESS
 -----------
 [ ] Full-scale GRU4Rec training on cluster via Slurm
-    - Last error: pkg_resources ModuleNotFoundError (job was running
-      ~/.local recbole instead of the conda one). Fixed with PYTHONNOUSERSITE=1
-      and setuptools install. Need to pull + resubmit.
+    - Last error: ModuleNotFoundError: recbole, even though `which python`
+      pointed at the conda env. Root cause: create_env.sh was run with a
+      different conda than the sbatch (which does `module load Anaconda3/
+      2025.06-0`), so `conda activate amazon-m2-venv` in the job resolved
+      to a bare env at a different prefix than the one pip populated.
+    - Fix applied to create_env.sh: added `module purge` + `module load
+      Anaconda3/2025.06-0` before the conda shell hook, added `set -e`
+      after env creation, and appended a `python -c "import recbole;
+      import torch; ..."` sanity check at the end.
+    - Next: run create_env.sh on a login node, verify the sanity-check
+      line prints, then resubmit run_training.sbatch.
 
 
 REMAINING WORK
