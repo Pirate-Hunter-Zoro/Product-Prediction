@@ -76,16 +76,24 @@ COMPLETED
       trained checkpoint's feet -- see seed issue below)
     - Runs scripts/evaluate.py with no args, relying on the glob
       fallback to pick up the newest GRU4Rec checkpoint
+[x] First eval attempt (2026-04-16) crashed in
+    recbole/evaluator/metrics.py:90 with
+    "AttributeError: module 'numpy' has no attribute 'float'".
+    Root cause: np.float was removed in NumPy 1.24; the env had
+    been built with "numpy<2.0", which was too loose. Tightened
+    the pin in create_env.sh to "numpy<1.24.0" (pip resolved to
+    1.23.x), rebuilt the env, and resubmitted -- no preprocess
+    rerun, so the checkpoint still evaluates against the original
+    .inter split.
+[x] GRU4Rec test-set evaluation completed (2026-04-16):
+    - MRR@100    = 0.1583
+    - Recall@100 = 0.3759
+    - Matches validation (0.1579 / 0.3742 at epoch 29) -- no
+      train/test leak, no overfit.
 
 
 IN PROGRESS
 -----------
-[ ] Submitted run_evaluation.sbatch on 2026-04-16; awaiting test-set
-    MRR@100 and Recall@100 for GRU4Rec. Expected to be in the same
-    ballpark as the best validation (MRR@100 ~= 0.158,
-    Recall@100 ~= 0.374 at epoch 29); a dramatic overshoot would
-    indicate a train/test leak from the unseeded preprocess.
-
 [ ] Pin a random seed in scripts/preprocess.py before running any second
     baseline. Currently preprocess.py does sessions_df.sample(frac=1) with
     no seed, so each sbatch submission re-splits the data differently,
@@ -102,7 +110,6 @@ IN PROGRESS
 REMAINING WORK
 --------------
 BASELINE EXPERIMENTS:
-[ ] Record GRU4Rec test-set metrics once the submitted eval job finishes
 [ ] Duplicate sbatch for NARM (change --model arg), train and record metrics
     -- BLOCKED on seeding preprocess.py so NARM evaluates on the same
        train/valid/test split as GRU4Rec; otherwise the comparison is
@@ -159,7 +166,11 @@ KNOWN ISSUES / GOTCHAS
 - PyTorch 2.6 changed torch.load default to weights_only=True, which breaks
   RecBole's checkpoint loading. Monkey-patch torch.load in any script that
   triggers a torch.load call (train.py and evaluate.py both need it).
-- RecBole 1.2.0 needs numpy<2.0 (uses removed np.float_)
+- RecBole 1.2.0 needs numpy<1.24 -- evaluator/metrics.py:90 uses
+  np.float (removed in NumPy 1.24) and data_utils uses np.float_
+  (removed in NumPy 2.0). Training will run under numpy<2.0 because
+  the evaluator code path never fires; the first actual .evaluate()
+  call is what trips it. Pin <1.24 to cover both.
 - RecBole has undeclared deps: ray, kmeans-pytorch, setuptools (pkg_resources)
 - RecBole's SequentialDataset.data_augmentation() wants a timestamp field; we
   bypass this by using pre-split files via benchmark_filename
