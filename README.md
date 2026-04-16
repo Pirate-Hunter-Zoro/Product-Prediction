@@ -128,7 +128,7 @@ python scripts/evaluate.py --model_file saved/GRU4Rec-Apr-15-2026_14-14-09.pth
 ## Known Issues
 
 - **PyTorch 2.6 / RecBole incompatibility:** PyTorch 2.6 changed the default of `torch.load` to `weights_only=True`, which breaks RecBole's checkpoint loading. Both `train.py` and `evaluate.py` include a monkey-patch that forces `weights_only=False`.
-- **RecBole 1.2.0 requires numpy < 2.0** due to use of the removed `np.float_` alias.
+- **RecBole 1.2.0 requires numpy < 1.24.0** due to use of the removed `np.float_` alias.
 - **RecBole undeclared dependencies:** ray, kmeans-pytorch, and setuptools (for `pkg_resources`) must be installed manually.
 - **conda activation on the cluster** requires `module purge && module load Anaconda3/2025.06-0` before any `conda activate` call. Without this, a different conda installation may be used, pointing to a different environment with the same name.
 - **`~/.local` site-packages interference:** The cluster's shared filesystem causes pip to fall back to `--user` installs. All pip commands in `create_env.sh` use `--no-user`, and `run_training.sbatch` sets `PYTHONNOUSERSITE=1` at runtime.

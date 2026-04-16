@@ -57,16 +57,34 @@ COMPLETED
       default change; fixed via monkey-patch in train.py
 [x] Added torch.load monkey-patch to scripts/train.py (forces
     weights_only=False to work around PyTorch 2.6 / RecBole incompatibility)
+[x] Completed scripts/evaluate.py (2026-04-16):
+    - argparse with --model_file flag (optional, default None)
+    - Glob fallback: sorts saved/GRU4Rec*.pth by st_mtime and picks
+      newest when --model_file is omitted
+    - Builds trainer via get_trainer(config["MODEL_TYPE"], config["model"]),
+      instantiates with (config, model)
+    - Calls trainer.evaluate(test_data, load_best_model=False,
+      show_progress=True)
+    - Dumps metrics dict as JSON to stdout
+    - torch.load monkey-patch included
+[x] Created run_evaluation.sbatch (2026-04-16):
+    - Mirrors run_training.sbatch boilerplate (module purge, conda
+      bootstrap, PYTHONNOUSERSITE=1, diagnostic prints for python
+      binary and recbole path)
+    - Requests 2 hours wall time (vs 7 days for training)
+    - Does NOT invoke preprocess.py (would re-split data under the
+      trained checkpoint's feet -- see seed issue below)
+    - Runs scripts/evaluate.py with no args, relying on the glob
+      fallback to pick up the newest GRU4Rec checkpoint
 
 
 IN PROGRESS
 -----------
-[ ] Finish scripts/evaluate.py to get test-set metrics from saved checkpoint
-    - Imports and torch.load monkey-patch done
-    - Still need: argparse for .pth path, load_data_and_model call,
-      get_trainer construction, trainer.evaluate(test_data, load_best_model=False),
-      and print results
-    - Saved checkpoint: saved/GRU4Rec-Apr-15-2026_14-14-09.pth
+[ ] Submitted run_evaluation.sbatch on 2026-04-16; awaiting test-set
+    MRR@100 and Recall@100 for GRU4Rec. Expected to be in the same
+    ballpark as the best validation (MRR@100 ~= 0.158,
+    Recall@100 ~= 0.374 at epoch 29); a dramatic overshoot would
+    indicate a train/test leak from the unseeded preprocess.
 
 [ ] Pin a random seed in scripts/preprocess.py before running any second
     baseline. Currently preprocess.py does sessions_df.sample(frac=1) with
@@ -84,8 +102,14 @@ IN PROGRESS
 REMAINING WORK
 --------------
 BASELINE EXPERIMENTS:
-[ ] Run scripts/evaluate.py on saved GRU4Rec checkpoint to get test-set metrics
+[ ] Record GRU4Rec test-set metrics once the submitted eval job finishes
 [ ] Duplicate sbatch for NARM (change --model arg), train and record metrics
+    -- BLOCKED on seeding preprocess.py so NARM evaluates on the same
+       train/valid/test split as GRU4Rec; otherwise the comparison is
+       meaningless
+[ ] Generalize scripts/evaluate.py glob fallback to take a model-name
+    argument (or just change the hardcoded "GRU4Rec*.pth" pattern) once
+    NARM/novel checkpoints start appearing in saved/
 [ ] (Optional) Also run Popularity baseline for a weak-model reference point
 
 NOVEL METHOD:
@@ -120,7 +144,8 @@ scripts/config.yaml         - RecBole config
 scripts/train.py            - Training entrypoint
 scripts/evaluate.py         - Standalone evaluation of saved checkpoints
 create_env.sh               - Environment setup
-run_training.sbatch         - Slurm job script
+run_training.sbatch         - Slurm job script for training
+run_evaluation.sbatch       - Slurm job script for test-set evaluation
 data_investigation.ipynb    - Initial data exploration
 data/sessions_train.csv     - Raw session data (gitignored, scp'd to cluster)
 data/products_train.csv     - Raw product metadata (gitignored)
