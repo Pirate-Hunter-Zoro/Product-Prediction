@@ -49,15 +49,24 @@ COMPLETED
     landmines the final create_env.sh defuses)
 [x] Verified recbole imports from the conda env prefix under
     PYTHONNOUSERSITE=1 (sanity check at end of create_env.sh)
+[x] GRU4Rec full-scale training completed on cluster (40 epochs, ~10 hrs)
+    - Best validation: epoch 29, MRR@100=0.1579, Recall@100=0.3742
+    - Early stopping triggered at epoch 40 (patience=10)
+    - Checkpoint saved: saved/GRU4Rec-Apr-15-2026_14-14-09.pth
+    - Test evaluation crashed due to PyTorch 2.6 torch.load weights_only
+      default change; fixed via monkey-patch in train.py
+[x] Added torch.load monkey-patch to scripts/train.py (forces
+    weights_only=False to work around PyTorch 2.6 / RecBole incompatibility)
 
 
 IN PROGRESS
 -----------
-[ ] Full-scale GRU4Rec training on cluster via Slurm
-    - Env is finally clean. Next action: sbatch run_training.sbatch, then
-      tail slurm_logs/training_out.txt to confirm recbole resolves inside
-      the conda env at job runtime, preprocess.py runs, and RecBole begins
-      training epochs.
+[ ] Finish scripts/evaluate.py to get test-set metrics from saved checkpoint
+    - Imports and torch.load monkey-patch done
+    - Still need: argparse for .pth path, load_data_and_model call,
+      get_trainer construction, trainer.evaluate(test_data, load_best_model=False),
+      and print results
+    - Saved checkpoint: saved/GRU4Rec-Apr-15-2026_14-14-09.pth
 
 [ ] Pin a random seed in scripts/preprocess.py before running any second
     baseline. Currently preprocess.py does sessions_df.sample(frac=1) with
@@ -75,7 +84,7 @@ IN PROGRESS
 REMAINING WORK
 --------------
 BASELINE EXPERIMENTS:
-[ ] Successfully train GRU4Rec on full dataset, record MRR@100 and Recall@100
+[ ] Run scripts/evaluate.py on saved GRU4Rec checkpoint to get test-set metrics
 [ ] Duplicate sbatch for NARM (change --model arg), train and record metrics
 [ ] (Optional) Also run Popularity baseline for a weak-model reference point
 
@@ -109,6 +118,7 @@ FILES THAT MATTER
 scripts/preprocess.py       - Data preprocessing
 scripts/config.yaml         - RecBole config
 scripts/train.py            - Training entrypoint
+scripts/evaluate.py         - Standalone evaluation of saved checkpoints
 create_env.sh               - Environment setup
 run_training.sbatch         - Slurm job script
 data_investigation.ipynb    - Initial data exploration
@@ -121,6 +131,9 @@ Final project instruction.pdf - Course project spec
 
 KNOWN ISSUES / GOTCHAS
 ----------------------
+- PyTorch 2.6 changed torch.load default to weights_only=True, which breaks
+  RecBole's checkpoint loading. Monkey-patch torch.load in any script that
+  triggers a torch.load call (train.py and evaluate.py both need it).
 - RecBole 1.2.0 needs numpy<2.0 (uses removed np.float_)
 - RecBole has undeclared deps: ray, kmeans-pytorch, setuptools (pkg_resources)
 - RecBole's SequentialDataset.data_augmentation() wants a timestamp field; we
