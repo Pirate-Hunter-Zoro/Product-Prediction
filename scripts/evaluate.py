@@ -22,9 +22,8 @@ def evaluate(model_file):
     
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_file", default=None, type=Path, required=False, help="Path to the model tensors, defaults to None")
+    parser.add_argument("--model", default="GRU4Rec", type=str, required=False, help="Name of the model, defaults to GRU4Rec")
     args = parser.parse_args()
-    model_path = args.model_file
-    if model_path is None:
-        model_path = sorted(list(Path("saved/").glob("GRU4Rec*.pth")), key=lambda x: x.stat().st_mtime, reverse=True)[0]
-    evaluate(model_path)
+    model_name = args.model
+    model_name = sorted(list(Path("saved/").glob(f"{model_name}*.pth")), key=lambda x: x.stat().st_mtime, reverse=True)[0]
+    evaluate(model_name)

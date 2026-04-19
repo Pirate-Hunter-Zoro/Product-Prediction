@@ -4,6 +4,8 @@ from pathlib import Path
 import pandas as pd
 import argparse
 
+SHUFFLE_SEED = 42 # The meaning of life
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--nrows', type=int, default=None)
@@ -17,7 +19,7 @@ def main():
     train_end = int(n*0.8)
     valid_end = int(n*0.9)
     # Shuffle order
-    sessions_df = sessions_df.sample(frac=1).reset_index(drop=True)
+    sessions_df = sessions_df.sample(frac=1, random_state=SHUFFLE_SEED).reset_index(drop=True)
     
     items = sessions_df['prev_items'].apply(lambda s: re.findall(r"[A-Z0-9]{10}", s))
     items = items.apply(lambda items_list: " ".join(items_list))

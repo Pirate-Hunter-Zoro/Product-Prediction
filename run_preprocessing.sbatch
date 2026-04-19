@@ -1,22 +1,15 @@
 #!/bin/bash
-#SBATCH --job-name=evaluation
+#SBATCH --job-name=preprocessing
 #SBATCH --partition=c3_accel
-#SBATCH --time=2:00:00
+#SBATCH --time=1:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH -o slurm_logs/evaluation_%x_out.txt
-#SBATCH -e slurm_logs/evaluation_%x_err.txt
-#SBATCH --gres=gpu:1
+#SBATCH -o slurm_logs/preprocessing_out.txt
+#SBATCH -e slurm_logs/preprocessing_err.txt
 
 # Exit immediately if command fails
 set -e
-
-MODEL="$1"
-if [ -z "$MODEL" ]; then
-    echo "Unspecified Model...." >&2
-    exit 2
-fi
 
 # ---- Conda configuration ----
 CONDA_ENV=amazon-m2-venv
@@ -36,4 +29,4 @@ mkdir -p slurm_logs
 # Explicitly pass the memory limit to srun to resolve the conflict
 which python
 python -c "import recbole; print(recbole.__file__)"
-python scripts/evaluate.py --model "$MODEL"
+python scripts/preprocess.py

@@ -5,12 +5,18 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH -o slurm_logs/training_out.txt
-#SBATCH -e slurm_logs/training_err.txt
+#SBATCH -o slurm_logs/training_%x_out.txt
+#SBATCH -e slurm_logs/training_%x_err.txt
 #SBATCH --gres=gpu:1
 
-# Exit immediately if command fails
+# Exit immediately if any command fails
 set -e
+
+MODEL="$1"
+if [ -z "$MODEL" ]; then
+    echo "Unspecified Model...." >&2
+    exit 2
+fi
 
 # ---- Conda configuration ----
 CONDA_ENV=amazon-m2-venv
@@ -30,5 +36,4 @@ mkdir -p slurm_logs
 # Explicitly pass the memory limit to srun to resolve the conflict
 which python
 python -c "import recbole; print(recbole.__file__)"
-python scripts/preprocess.py
-python scripts/train.py --model GRU4Rec
+python scripts/train.py --model "$MODEL"

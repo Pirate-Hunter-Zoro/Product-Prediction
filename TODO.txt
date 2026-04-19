@@ -16,6 +16,45 @@ Framework: RecBole (PyTorch-based recommendation library). Baselines use
 built-in RecBole models; novel method will subclass SequentialRecommender.
 
 
+PAPER-DERIVED CONTEXT (Amazon-M2.pdf, NeurIPS 2023 Datasets & Benchmarks)
+------------------------------------------------------------------------
+Section 4.1 / Table 3 defines Task 1 (our task). Key facts to cite and plan
+against:
+
+- Task 1 baselines reported in paper: Popularity, GRU4Rec++, NARM, STAMP,
+  SRGNN, CORE, MGS. Our plan (GRU4Rec, NARM, Popularity + novel) maps
+  directly onto a subset.
+- Paper Task 1 evaluation is UK/DE/JP only (the three large locales).
+  Paper's "Overall" column is the union of those three. Our current
+  preprocess/evaluation uses all 6 locales -> our "Overall" is not
+  directly comparable to the paper's "Overall" without a locale filter.
+- Paper reports MRR@100 and Recall@100 per-locale (UK, DE, JP) plus
+  Overall. NDCG@100 also reported in Appendix C. Our evaluate.py
+  currently emits only a single global MRR/Recall pair.
+- Table 3 headline: Popularity beats every deep model on MRR@100
+  (0.2426 vs ~0.15-0.22). Deep models only dominate on Recall@100,
+  with CORE leading at 0.5591. GRU4Rec++ in paper = 0.1757 / 0.3808;
+  our plain GRU4Rec = 0.1583 / 0.3759 (pre-seed split) - in the right
+  ballpark, slightly below "++" which has data augmentation we don't.
+- Table 5 ablation: naive Multilingual Sentence-BERT embeddings of
+  product titles added to SRGNN / GRU4Rec++ often HURT performance.
+  Paper text: "how to effectively utilize textual features remains
+  an open question." This is the most citable motivation for any
+  attribute-aware novel method.
+- Figure 2 dataset-analysis plots: (a) long-tail product frequency,
+  (b) cross-locale product overlap heatmap, (c) session length
+  distribution, (d) repeat-pattern ratio per locale (~35% across
+  all locales), (e) distribution of repeated products per session,
+  (f) 10th-highest SKNN score distribution.
+- Section 3 SKNN analysis: most sessions can find ~10 similar
+  sessions with high cosine-overlap SKNN score. Strong latent
+  collaborative-filtering signal a hybrid novel method could use.
+- Task 2 (Section 4.2): pretraining on large locales (UK/DE/JP),
+  finetuning on small locales (ES/FR/IT). Cross-locale transfer is
+  called out as an explicit open problem. Possible novelty angle
+  but heavier scope.
+
+
 COMPLETED
 ---------
 [x] Scanned repo, paper, and reference project
@@ -90,16 +129,35 @@ COMPLETED
     - Recall@100 = 0.3759
     - Matches validation (0.1579 / 0.3742 at epoch 29) -- no
       train/test leak, no overfit.
+    - Note: this is on the PRE-SEED split; will be re-run on the
+      seeded split along with NARM.
+[x] Seeded preprocess.py shuffle (2026-04-18):
+    - Added module-level SEED = 42 constant; sessions_df.sample now
+      passes random_state=SEED. Splits are now reproducible from
+      clean clone.
+[x] Parameterized run_training.sbatch by model (2026-04-18):
+    - Reads model name from $1, fails fast with exit 2 + stderr
+      message if missing, passes it to train.py --model.
+    - Log path uses %x placeholder so jobs with different
+      --job-name settings produce distinct log files.
+    - preprocess.py call removed from the sbatch -- preprocessing is
+      now a separate sbatch so concurrent training jobs do not race
+      to rewrite the same .inter files.
+[x] Created run_preprocessing.sbatch (2026-04-18):
+    - Separate sbatch for preprocessing only; no GPU request.
+[x] Created submit_training.sh wrapper (2026-04-18):
+    - Submits GRU4Rec and NARM training jobs with distinct
+      --job-name values (GRU4Rec and NARM).
+[x] Ran preprocessing on cluster with seeded split (2026-04-18):
+    - job 1860442, produced fresh data/amazon_m2/*.inter files.
 
 
 IN PROGRESS
 -----------
-[ ] Pin a random seed in scripts/preprocess.py before running any second
-    baseline. Currently preprocess.py does sessions_df.sample(frac=1) with
-    no seed, so each sbatch submission re-splits the data differently,
-    which would make GRU4Rec vs NARM vs Novel comparisons meaningless.
-    Either seed the shuffle or run preprocess once and drop it from the
-    sbatch.
+[ ] Submit submit_training.sh on the cluster. This launches two
+    concurrent jobs, one for GRU4Rec and one for NARM, both training
+    on the new seeded split. Expected runtime ~10 hours each in
+    parallel.
 
 [ ] (Hygiene, non-blocking) rm -rf ~/.local/lib/python3.10 on the cluster.
     Earlier failed create_env.sh runs dumped a full torch+CUDA+recbole
@@ -110,33 +168,95 @@ IN PROGRESS
 REMAINING WORK
 --------------
 BASELINE EXPERIMENTS:
-[ ] Duplicate sbatch for NARM (change --model arg), train and record metrics
-    -- BLOCKED on seeding preprocess.py so NARM evaluates on the same
-       train/valid/test split as GRU4Rec; otherwise the comparison is
-       meaningless
-[ ] Generalize scripts/evaluate.py glob fallback to take a model-name
-    argument (or just change the hardcoded "GRU4Rec*.pth" pattern) once
-    NARM/novel checkpoints start appearing in saved/
-[ ] (Optional) Also run Popularity baseline for a weak-model reference point
+[ ] Record NARM test metrics once training finishes. Expected
+    per Table 3 of the paper: MRR@100 ~0.19, Recall@100 ~0.42 on
+    UK/DE/JP-only; our "all 6 locales Overall" may land slightly
+    different.
+[ ] Re-record GRU4Rec test metrics on the seeded split. Expect the
+    new number to land within ~±0.01 of 0.1583 / 0.3759; larger
+    drift means something is wrong with the new preprocess.
+[ ] Add a Popularity baseline. Paper Table 3 shows it dominates
+    deep models on MRR (0.2426 vs ~0.15-0.22), so it is NOT
+    optional -- it is the strongest MRR reference point in the
+    literature and our writeup must include it. RecBole has a
+    built-in Pop model; pass --model Pop through the existing
+    parameterized sbatch.
+[ ] Generalize scripts/evaluate.py glob fallback to take a
+    model-name argument instead of hardcoding "GRU4Rec*.pth" --
+    required once NARM / Pop / novel checkpoints appear in saved/.
+
+EVALUATION COVERAGE (paper-matching):
+[ ] Add NDCG@100 to scripts/config.yaml metrics list. Paper
+    reports it in Appendix C; zero-cost add in RecBole.
+[ ] Decide evaluation scope and document the choice:
+    (a) Evaluate on all 6 locales (current behavior) -- cleaner
+        story but "Overall" numbers are not directly comparable
+        to Table 3.
+    (b) Filter test to UK/DE/JP only, matching paper Task 1 --
+        enables direct comparison but discards ~9% of test
+        sessions.
+    Recommendation: do (a) for primary results and add a
+    UK/DE/JP-only row in the final table for paper comparison.
+[ ] Per-locale breakdown. Paper Table 3 reports MRR@100 /
+    Recall@100 separately for UK, DE, JP and Overall.
+    Reproducing this requires slicing test predictions by
+    locale before aggregating. Needs a small extension to
+    evaluate.py: map session_id back to locale via
+    sessions_train.csv, compute metrics per locale group.
 
 NOVEL METHOD:
-[ ] Design the novel contribution. Ideas to consider:
-    - Use product attributes (title, brand, price, desc) that baselines ignore
-      — the paper's Table 5 showed BERT embeddings alone didn't help, so there's
-      room for a smarter way to incorporate text/attributes
-    - Combine a popularity signal with the deep model (since popularity crushes
-      deep models on MRR in the paper)
-    - Something with the repeat-item pattern (~35% of sessions have repeats)
-    - Locale-aware routing or a lightweight cross-locale transfer mechanism
-    - Anything else that feels principled and testable
+[ ] Design the novel contribution. Ideas ranked by how well the
+    paper motivates them:
+    - Text-attribute integration that goes beyond naive BERT
+      averaging. Table 5 of the paper shows naive Multilingual
+      Sentence-BERT embeddings of titles ADDED to SRGNN /
+      GRU4Rec++ often degrades performance. A principled fusion
+      (e.g. gated, attention-over-attributes, contrastive
+      alignment) has an open-problem citation straight from the
+      authors.
+    - Popularity-aware deep model. Paper Table 3 shows Popularity
+      dominates every deep model on MRR. A hybrid that blends a
+      popularity prior with a sequence model at inference (e.g.
+      logit interpolation, gated routing) has strong empirical
+      motivation.
+    - Repeat-consumption modeling. Paper Section 3 + Figure 2d
+      show ~35% of sessions contain repeats. Explicitly modeling
+      whether the next item is a repeat vs. a new item (two-
+      headed decoder, copy mechanism) is a clean, testable design.
+    - SKNN-augmented sequence model. Paper Figure 2f shows most
+      sessions have high-similarity neighbors. Adding an SKNN
+      retrieval branch that conditions the deep model is
+      data-driven.
+    - Cross-locale transfer (Task 2 framing). Heaviest scope but
+      the paper calls it out explicitly; a lightweight adapter or
+      shared-embedding scheme could work.
 [ ] Implement novel method as a RecBole SequentialRecommender subclass
 [ ] Train novel method on full dataset, record metrics
+[ ] Ablation experiments -- required regardless of which idea wins;
+    the paper's Table 5 is the template.
 
-COMPARISON / ANALYSIS:
-[ ] Build a results table: Popularity (if run), GRU4Rec, NARM, Novel method
-    with MRR@100 and Recall@100 (and maybe per-locale breakdowns)
-[ ] Ablation experiments on the novel method (what parts matter?)
-[ ] Qualitative analysis (example sessions + what each model predicts)
+PLOTS FOR REPORT (build after numbers are final; do NOT yak-shave
+plotting infrastructure ahead of results):
+[ ] Model-comparison bar chart. X-axis: Popularity, GRU4Rec, NARM,
+    Novel. Y-axis: MRR@100 (and twin-axis or second chart for
+    Recall@100). Mirrors paper Table 3 visually -- paper itself
+    uses tables, not charts, so this is our contribution to
+    presentation.
+[ ] Per-locale grouped bar chart. X-axis: UK, DE, JP, ES, FR, IT
+    (and optionally Overall). Bars grouped by model. Shows where
+    the novel method helps vs baselines across locales.
+[ ] Recall@K sweep curve. X: K from 1 to 100. Y: Recall@K. One
+    curve per model. Shows retrieval shape, not just a fixed-K
+    number. RecBole can compute Recall at multiple K in one pass.
+[ ] (Optional) Session-length slicing bar chart. Bucket test
+    sessions by input length (1, 2, 3, 4, 5+). MRR@100 per
+    bucket per model. Shows whether novel method helps short
+    vs long sessions.
+[ ] Repeat-pattern ratio per locale (paper Figure 2d). Cheap add
+    to data_investigation.ipynb; uses raw CSV, no model needed.
+[ ] Product frequency long-tail (paper Figure 2a) on log-log
+    axes. Probably already partially in data_investigation; clean
+    up and save as a figure file.
 
 DELIVERABLES:
 [ ] Write up the project report (LaTeX or Markdown)
@@ -146,18 +266,21 @@ DELIVERABLES:
 
 FILES THAT MATTER
 -----------------
-scripts/preprocess.py       - Data preprocessing
+scripts/preprocess.py       - Data preprocessing (seeded shuffle, SEED=42)
 scripts/config.yaml         - RecBole config
 scripts/train.py            - Training entrypoint
 scripts/evaluate.py         - Standalone evaluation of saved checkpoints
 create_env.sh               - Environment setup
-run_training.sbatch         - Slurm job script for training
+run_preprocessing.sbatch    - Slurm job script for preprocessing
+run_training.sbatch         - Parameterized Slurm job script for training
+                              (takes model name as $1)
 run_evaluation.sbatch       - Slurm job script for test-set evaluation
+submit_training.sh          - Wrapper that submits GRU4Rec + NARM jobs
 data_investigation.ipynb    - Initial data exploration
 data/sessions_train.csv     - Raw session data (gitignored, scp'd to cluster)
 data/products_train.csv     - Raw product metadata (gitignored)
 Amazon-M2-Session-Recommendation/  - Reference implementation (gitignored)
-Amazon-M2.pdf               - Dataset paper
+Amazon-M2.pdf               - Dataset paper (NeurIPS 2023 D&B)
 Final project instruction.pdf - Course project spec
 
 
@@ -174,7 +297,7 @@ KNOWN ISSUES / GOTCHAS
 - RecBole has undeclared deps: ray, kmeans-pytorch, setuptools (pkg_resources)
 - RecBole's SequentialDataset.data_augmentation() wants a timestamp field; we
   bypass this by using pre-split files via benchmark_filename
-- ~/.local site-packages can override conda env — use PYTHONNOUSERSITE=1
+- ~/.local site-packages can override conda env -- use PYTHONNOUSERSITE=1
   at runtime AND on every pip install line (otherwise pip's
   "already satisfied" check sees ~/.local stale copies and skips
   installing into the env)
@@ -189,3 +312,9 @@ KNOWN ISSUES / GOTCHAS
   create_env.sh uses `--no-user` to force the install into the env anyway.
 - Mac dev only; actual training must run on the GPU cluster
 - 3.6M sessions + 1.4M items means OOM on laptop; always test with --nrows
+- run_training.sbatch requires a model argument; submit via
+  submit_training.sh or with `sbatch --job-name=<name> run_training.sbatch
+  <ModelName>`. Submitting with no args exits 2.
+- Paper Task 1 evaluation scope is UK/DE/JP only, so paper "Overall"
+  numbers are NOT the same universe as our all-6-locales "Overall".
+  Always label evaluation scope when comparing.

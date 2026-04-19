@@ -27,19 +27,23 @@ The raw data files (`data/sessions_train.csv`, `data/products_train.csv`) are gi
 
 ```text
 scripts/
-  preprocess.py       Data preprocessing (CSV -> RecBole .inter format)
-  config.yaml         RecBole configuration
-  train.py            Training entrypoint
-  evaluate.py         Standalone evaluation of saved checkpoints
-create_env.sh         Conda environment setup (cluster)
-run_training.sbatch   Slurm job script for GPU cluster training
-data_investigation.ipynb  Initial data exploration
+  preprocess.py            Data preprocessing (CSV -> RecBole .inter, SEED=42)
+  config.yaml              RecBole configuration
+  train.py                 Training entrypoint
+  evaluate.py              Standalone evaluation of saved checkpoints
+create_env.sh              Conda environment setup (cluster)
+run_preprocessing.sbatch   Slurm job for preprocessing (CPU only)
+run_training.sbatch        Slurm job for training (takes model name as $1)
+run_evaluation.sbatch      Slurm job for evaluation (takes model name as $1)
+submit_training.sh         Wrapper: submits GRU4Rec and NARM training jobs
+submit_evaluation.sh       Wrapper: submits GRU4Rec and NARM evaluation jobs
+data_investigation.ipynb   Initial data exploration
 data/
-  sessions_train.csv  Raw session data (gitignored)
-  products_train.csv  Raw product metadata (gitignored)
-  amazon_m2/          Generated .inter files (output of preprocess.py)
-saved/                Model checkpoints
-slurm_logs/           Slurm stdout/stderr logs
+  sessions_train.csv       Raw session data (gitignored)
+  products_train.csv       Raw product metadata (gitignored)
+  amazon_m2/               Generated .inter files (output of preprocess.py)
+saved/                     Model checkpoints
+slurm_logs/                Slurm stdout/stderr logs
 ```
 
 ## Environment Setup
@@ -83,15 +87,19 @@ Set the Python interpreter to the full path of the environment's binary:
 
 ## Usage
 
+The end-to-end cluster pipeline has three Slurm stages: preprocessing, training, and evaluation. Environment setup is covered above. Preprocessing runs once and writes `.inter` files that training and evaluation both consume, so it must complete before training jobs are submitted.
+
 ### Preprocessing
 
-Convert raw CSV data to RecBole `.inter` format with an 80/10/10 train/valid/test split:
+Convert raw CSV data to RecBole `.inter` format with a seeded 80/10/10 train/valid/test split:
 
 ```bash
-python scripts/preprocess.py
+sbatch run_preprocessing.sbatch
 ```
 
-For local smoke tests on a small subset:
+Output lands in `data/amazon_m2/`. The shuffle is seeded (`SEED=42` in `scripts/preprocess.py`) so the split is reproducible from a clean clone. No GPU is requested.
+
+For local smoke tests on a small subset, call the script directly:
 
 ```bash
 python scripts/preprocess.py --nrows 3000
@@ -99,23 +107,39 @@ python scripts/preprocess.py --nrows 3000
 
 ### Training
 
-Submit a training job on the cluster via Slurm:
+Submit GRU4Rec and NARM training jobs concurrently:
 
 ```bash
-sbatch run_training.sbatch
+bash submit_training.sh
 ```
 
-The sbatch script runs preprocessing followed by GRU4Rec training. To train a different model, change the `--model` argument in the sbatch script (e.g., `--model NARM`).
+This dispatches two Slurm jobs via `run_training.sbatch`, each tagged with a distinct `--job-name` so their logs do not collide. `run_training.sbatch` requires the model name as `$1` and exits with code 2 if it is missing; preprocessing is no longer part of this sbatch, so concurrent training jobs cannot race on the `.inter` files.
 
-Logs are written to `slurm_logs/training_out.txt` and `slurm_logs/training_err.txt`.
+To train a single model by hand:
+
+```bash
+sbatch --job-name=<ModelName> run_training.sbatch <ModelName>
+```
+
+Logs are written to `slurm_logs/training_<JobName>_out.txt` and `slurm_logs/training_<JobName>_err.txt`.
 
 ### Evaluation
 
-Evaluate a saved checkpoint on the test set without retraining:
+Evaluate the most recent GRU4Rec and NARM checkpoints on the test set:
 
 ```bash
-python scripts/evaluate.py --model_file saved/GRU4Rec-Apr-15-2026_14-14-09.pth
+bash submit_evaluation.sh
 ```
+
+`run_evaluation.sbatch` takes the model name as `$1` and forwards it to `scripts/evaluate.py --model <ModelName>`. The evaluator globs `saved/<ModelName>*.pth`, selects the newest file by modification time, and prints MRR@100 and Recall@100 as JSON to stdout.
+
+To evaluate a single model by hand:
+
+```bash
+sbatch --job-name=<ModelName> run_evaluation.sbatch <ModelName>
+```
+
+Logs are written to `slurm_logs/evaluation_<JobName>_out.txt` and `slurm_logs/evaluation_<JobName>_err.txt`.
 
 ## Models
 
