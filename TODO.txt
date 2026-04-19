@@ -174,30 +174,42 @@ COMPLETED
 [x] Verified scripts/evaluate.py is already parameterized by --model
     (2026-04-19). Prior "generalize glob fallback" TODO entry was stale
     and has been removed from REMAINING WORK.
+[x] Pop baseline training completed (2026-04-19, job 1861272).
+    Short runtime as expected (frequency count, no backprop).
+    Checkpoint in saved/Pop*.pth.
+[x] scripts/locale_map.py (2026-04-19):
+    - Reads sessions_train.csv, assigns session_id = row index BEFORE
+      any shuffle (byte-identical to preprocess.py line 15 so the ids
+      align with the .inter files), writes a two-column parquet lookup
+      (session_id int, locale str) to data/amazon_m2/locale_map.parquet.
+    - CLI: --nrows (smoke) and --output (override default path).
+    - Full-scale run: 3,606,249 rows, session_id unique, all six
+      locales present (UK 1,182,181; DE 1,111,416; JP 979,119;
+      IT 126,925; FR 117,561; ES 89,047).
+[x] scripts/split_test_by_locale.py (2026-04-19):
+    - Reads amazon_m2.test.inter + locale_map.parquet, left-merges on
+      session_id:token, hard-fails on any unmatched rows, and writes
+      six amazon_m2.test_<locale>.inter files preserving the original
+      RecBole schema (incl. :token / :token_seq suffixes).
+    - Smoke test totals reconcile exactly: 360,625 rows across six
+      files (UK 118,320; DE 110,985; JP 98,014; IT 12,731; FR 11,782;
+      ES 8,793), wc -l sum matches original test.inter line count.
+    - Per-locale test counts are within rounding of 10% of the
+      full-dataset locale counts -- seeded 80/10/10 split is stable.
 
 
 IN PROGRESS
 -----------
-[ ] Pop baseline training (job 1861272, submitted 2026-04-19). First
-    Pop submission (1861270) was cancelled because it had parsed the
-    pre-NDCG config.yaml at startup; re-submitted after NDCG edit so
-    Pop's run picks up the full metric set on the first try. Expected
-    runtime: short (frequency count, no backprop).
-
-[ ] (Hygiene, non-blocking) rm -rf ~/.local/lib/python3.10 on the cluster.
-    Earlier failed create_env.sh runs dumped a full torch+CUDA+recbole
-    stack there. Runtime is masked by PYTHONNOUSERSITE=1 in the sbatch,
-    but it's wasted disk and a future trap.
+[ ] Pop test evaluation (job 1861275, submitted 2026-04-19).
+    Run via `sbatch --job-name=Pop run_evaluation.sbatch Pop`.
+    Expected per paper Table 3: MRR@100 ~0.24, Recall@100 ~0.48 on
+    UK/DE/JP-only; our all-6-locales "Overall" may drift slightly.
+    Log: slurm_logs/evaluation_Pop_out.txt.
 
 
 REMAINING WORK
 --------------
 BASELINE EXPERIMENTS:
-[ ] Evaluate Pop on the test set once job 1861272 finishes.
-    Expected per Table 3: MRR@100 ~0.24, Recall@100 ~0.48 on
-    UK/DE/JP-only; our all-6-locales "Overall" may drift
-    slightly. This is the strongest MRR reference in the
-    literature; the writeup requires it.
 [ ] Decide how GRU4Rec and NARM get NDCG@100 numbers. Their
     checkpoints embed the pre-NDCG config, so a plain
     evaluate.py run will not produce NDCG. Options:
@@ -218,12 +230,18 @@ EVALUATION COVERAGE (paper-matching):
         sessions.
     Recommendation: do (a) for primary results and add a
     UK/DE/JP-only row in the final table for paper comparison.
-[ ] Per-locale breakdown. Paper Table 3 reports MRR@100 /
-    Recall@100 separately for UK, DE, JP and Overall.
-    Reproducing this requires slicing test predictions by
-    locale before aggregating. Needs a small extension to
-    evaluate.py: map session_id back to locale via
-    sessions_train.csv, compute metrics per locale group.
+[ ] Per-locale breakdown: extend evaluate.py to consume the
+    per-locale test .inter files. Infrastructure is in place:
+      - data/amazon_m2/locale_map.parquet  (from locale_map.py)
+      - data/amazon_m2/amazon_m2.test_<locale>.inter for all six
+        locales (from split_test_by_locale.py).
+    Remaining work is evaluate.py only: iterate locales, point
+    the test loader at the per-locale .inter for each (via a
+    benchmark_filename override on load_data_and_model or by
+    swapping test_data.dataset.inter_feat), call trainer.evaluate
+    per locale, and emit a single JSON keyed by locale
+    (UK/DE/JP/IT/FR/ES) plus Overall (the original full-test run).
+    Mirrors paper Table 3 layout.
 
 NOVEL METHOD:
 [ ] Design the novel contribution. Ideas ranked by how well the
@@ -287,22 +305,28 @@ DELIVERABLES:
 
 FILES THAT MATTER
 -----------------
-scripts/preprocess.py       - Data preprocessing (seeded shuffle, SEED=42)
-scripts/config.yaml         - RecBole config
-scripts/train.py            - Training entrypoint
-scripts/evaluate.py         - Standalone evaluation of saved checkpoints
-create_env.sh               - Environment setup
-run_preprocessing.sbatch    - Slurm job script for preprocessing
-run_training.sbatch         - Parameterized Slurm job script for training
-                              (takes model name as $1)
-run_evaluation.sbatch       - Slurm job script for test-set evaluation
-submit_training.sh          - Wrapper that submits GRU4Rec + NARM jobs
-data_investigation.ipynb    - Initial data exploration
-data/sessions_train.csv     - Raw session data (gitignored, scp'd to cluster)
-data/products_train.csv     - Raw product metadata (gitignored)
+scripts/preprocess.py            - Data preprocessing (seeded shuffle, SEED=42)
+scripts/config.yaml              - RecBole config
+scripts/train.py                 - Training entrypoint
+scripts/evaluate.py              - Standalone evaluation of saved checkpoints
+scripts/locale_map.py            - Builds session_id -> locale parquet lookup
+scripts/split_test_by_locale.py  - Splits test.inter into per-locale slices
+create_env.sh                    - Environment setup
+run_preprocessing.sbatch         - Slurm job script for preprocessing
+run_training.sbatch              - Parameterized Slurm job script for training
+                                   (takes model name as $1)
+run_evaluation.sbatch            - Parameterized Slurm job script for eval
+                                   (takes model name as $1)
+submit_training.sh               - Wrapper that submits GRU4Rec + NARM + Pop jobs
+submit_evaluation.sh             - Wrapper that submits GRU4Rec + NARM + Pop eval
+data_investigation.ipynb         - Initial data exploration
+data/sessions_train.csv          - Raw session data (gitignored, scp'd to cluster)
+data/products_train.csv          - Raw product metadata (gitignored)
+data/amazon_m2/locale_map.parquet           - session_id -> locale lookup
+data/amazon_m2/amazon_m2.test_<loc>.inter   - Per-locale test slices
 Amazon-M2-Session-Recommendation/  - Reference implementation (gitignored)
-Amazon-M2.pdf               - Dataset paper (NeurIPS 2023 D&B)
-Final project instruction.pdf - Course project spec
+Amazon-M2.pdf                    - Dataset paper (NeurIPS 2023 D&B)
+Final project instruction.pdf    - Course project spec
 
 
 KNOWN ISSUES / GOTCHAS
@@ -339,3 +363,16 @@ KNOWN ISSUES / GOTCHAS
 - Paper Task 1 evaluation scope is UK/DE/JP only, so paper "Overall"
   numbers are NOT the same universe as our all-6-locales "Overall".
   Always label evaluation scope when comparing.
+- Interactive-shell `python` may NOT be the venv python even when the
+  venv prompt prefix is showing. On the cluster, if the Anaconda3
+  module has been loaded in the same shell, `which python` can resolve
+  to /opt/apps/easybuild/.../Anaconda3/2025.06-0/.../python3.13 while
+  the venv (amazon-m2-venv) is python 3.10. Parquet files written by
+  the venv's pyarrow may then fail to read under the system pyarrow
+  with "OSError: Repetition level histogram size mismatch" (pyarrow
+  version drift between writer and reader, not actual corruption).
+  Fix: force the venv binary explicitly
+  (/media/studies/ehr_study/analysis/mferguson/venvs/amazon-m2-venv/bin/python)
+  or re-activate cleanly: `module purge && module load
+  Anaconda3/2025.06-0 && conda activate amazon-m2-venv` and re-check
+  `which python`.

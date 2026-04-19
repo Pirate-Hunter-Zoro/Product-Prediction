@@ -31,6 +31,8 @@ scripts/
   config.yaml              RecBole configuration
   train.py                 Training entrypoint
   evaluate.py              Standalone evaluation of saved checkpoints
+  locale_map.py            Builds session_id -> locale lookup (parquet)
+  split_test_by_locale.py  Splits test.inter into per-locale test_<locale>.inter files
 create_env.sh              Conda environment setup (cluster)
 run_preprocessing.sbatch   Slurm job for preprocessing (CPU only)
 run_training.sbatch        Slurm job for training (takes model name as $1)
@@ -41,7 +43,10 @@ data_investigation.ipynb   Initial data exploration
 data/
   sessions_train.csv       Raw session data (gitignored)
   products_train.csv       Raw product metadata (gitignored)
-  amazon_m2/               Generated .inter files (output of preprocess.py)
+  amazon_m2/               Generated RecBole artifacts:
+                             amazon_m2.{train,valid,test}.inter (preprocess.py)
+                             amazon_m2.test_<locale>.inter      (split_test_by_locale.py)
+                             locale_map.parquet                 (locale_map.py)
 saved/                     Model checkpoints
 slurm_logs/                Slurm stdout/stderr logs
 ```
@@ -145,9 +150,9 @@ Logs are written to `slurm_logs/evaluation_<JobName>_out.txt` and `slurm_logs/ev
 
 | Model   | Type     | Status    |
 | ------- | -------- | --------- |
-| GRU4Rec | Baseline | Trained   |
-| NARM    | Baseline | Trained   |
-| Pop     | Baseline | Training  |
+| GRU4Rec | Baseline | Trained, evaluated |
+| NARM    | Baseline | Trained, evaluated |
+| Pop     | Baseline | Trained, evaluating |
 | TBD     | Novel    | In design |
 
 ## Known Issues
