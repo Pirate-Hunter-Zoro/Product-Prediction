@@ -150,14 +150,39 @@ COMPLETED
       --job-name values (GRU4Rec and NARM).
 [x] Ran preprocessing on cluster with seeded split (2026-04-18):
     - job 1860442, produced fresh data/amazon_m2/*.inter files.
+[x] GRU4Rec and NARM trained on seeded split (2026-04-19):
+    - Both jobs completed; checkpoints in saved/.
+[x] GRU4Rec test eval on seeded split (2026-04-19):
+    - MRR@100    = 0.1609
+    - Recall@100 = 0.3852
+    - Within +/-0.01 of pre-seed (0.1583 / 0.3759); seeded split looks
+      consistent, no red flags.
+[x] NARM test eval on seeded split (2026-04-19):
+    - MRR@100    = 0.1522
+    - Recall@100 = 0.3637
+    - Below paper's NARM (~0.19 / ~0.42) as expected; paper Task 1
+      evaluates UK/DE/JP only while ours includes all 6 locales.
+[x] Added NDCG@100 to config.yaml metrics (2026-04-19):
+    - metrics: ['MRR', 'Recall', 'NDCG']; valid_metric unchanged.
+    - Paper reports NDCG@100 in Appendix C; zero-cost parity add.
+    - Caveat: GRU4Rec/NARM checkpoints predate this change and embed
+      their training-time config, so load_data_and_model will not
+      retroactively produce NDCG at eval time. Decide whether to
+      re-run evaluate.py with a config override or re-train.
+[x] Added Pop to submit_training.sh and submit_evaluation.sh wrappers
+    (2026-04-19). Both wrappers now dispatch three jobs.
+[x] Verified scripts/evaluate.py is already parameterized by --model
+    (2026-04-19). Prior "generalize glob fallback" TODO entry was stale
+    and has been removed from REMAINING WORK.
 
 
 IN PROGRESS
 -----------
-[ ] Submit submit_training.sh on the cluster. This launches two
-    concurrent jobs, one for GRU4Rec and one for NARM, both training
-    on the new seeded split. Expected runtime ~10 hours each in
-    parallel.
+[ ] Pop baseline training (job 1861272, submitted 2026-04-19). First
+    Pop submission (1861270) was cancelled because it had parsed the
+    pre-NDCG config.yaml at startup; re-submitted after NDCG edit so
+    Pop's run picks up the full metric set on the first try. Expected
+    runtime: short (frequency count, no backprop).
 
 [ ] (Hygiene, non-blocking) rm -rf ~/.local/lib/python3.10 on the cluster.
     Earlier failed create_env.sh runs dumped a full torch+CUDA+recbole
@@ -168,26 +193,22 @@ IN PROGRESS
 REMAINING WORK
 --------------
 BASELINE EXPERIMENTS:
-[ ] Record NARM test metrics once training finishes. Expected
-    per Table 3 of the paper: MRR@100 ~0.19, Recall@100 ~0.42 on
-    UK/DE/JP-only; our "all 6 locales Overall" may land slightly
-    different.
-[ ] Re-record GRU4Rec test metrics on the seeded split. Expect the
-    new number to land within ~±0.01 of 0.1583 / 0.3759; larger
-    drift means something is wrong with the new preprocess.
-[ ] Add a Popularity baseline. Paper Table 3 shows it dominates
-    deep models on MRR (0.2426 vs ~0.15-0.22), so it is NOT
-    optional -- it is the strongest MRR reference point in the
-    literature and our writeup must include it. RecBole has a
-    built-in Pop model; pass --model Pop through the existing
-    parameterized sbatch.
-[ ] Generalize scripts/evaluate.py glob fallback to take a
-    model-name argument instead of hardcoding "GRU4Rec*.pth" --
-    required once NARM / Pop / novel checkpoints appear in saved/.
+[ ] Evaluate Pop on the test set once job 1861272 finishes.
+    Expected per Table 3: MRR@100 ~0.24, Recall@100 ~0.48 on
+    UK/DE/JP-only; our all-6-locales "Overall" may drift
+    slightly. This is the strongest MRR reference in the
+    literature; the writeup requires it.
+[ ] Decide how GRU4Rec and NARM get NDCG@100 numbers. Their
+    checkpoints embed the pre-NDCG config, so a plain
+    evaluate.py run will not produce NDCG. Options:
+    (a) Pass a config override to trainer.evaluate / re-load
+        the model with an augmented config that includes NDCG
+        in the metrics list. Cheapest if RecBole cooperates.
+    (b) Re-train both models under the new config. Clean but
+        ~10 hrs each.
+    Recommendation: try (a) first.
 
 EVALUATION COVERAGE (paper-matching):
-[ ] Add NDCG@100 to scripts/config.yaml metrics list. Paper
-    reports it in Appendix C; zero-cost add in RecBole.
 [ ] Decide evaluation scope and document the choice:
     (a) Evaluate on all 6 locales (current behavior) -- cleaner
         story but "Overall" numbers are not directly comparable

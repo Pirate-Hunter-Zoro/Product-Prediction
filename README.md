@@ -4,7 +4,7 @@ Session-based next product recommendation on the Amazon-M2 multilingual shopping
 
 ## Task
 
-Given a shopping session (a sequence of viewed/purchased products), predict the next product the user will interact with. Evaluation uses MRR@100 and Recall@100.
+Given a shopping session (a sequence of viewed/purchased products), predict the next product the user will interact with. Evaluation uses MRR@100, Recall@100, and NDCG@100.
 
 ## Dataset
 
@@ -35,8 +35,8 @@ create_env.sh              Conda environment setup (cluster)
 run_preprocessing.sbatch   Slurm job for preprocessing (CPU only)
 run_training.sbatch        Slurm job for training (takes model name as $1)
 run_evaluation.sbatch      Slurm job for evaluation (takes model name as $1)
-submit_training.sh         Wrapper: submits GRU4Rec and NARM training jobs
-submit_evaluation.sh       Wrapper: submits GRU4Rec and NARM evaluation jobs
+submit_training.sh         Wrapper: submits GRU4Rec, NARM, and Pop training jobs
+submit_evaluation.sh       Wrapper: submits GRU4Rec, NARM, and Pop evaluation jobs
 data_investigation.ipynb   Initial data exploration
 data/
   sessions_train.csv       Raw session data (gitignored)
@@ -107,13 +107,13 @@ python scripts/preprocess.py --nrows 3000
 
 ### Training
 
-Submit GRU4Rec and NARM training jobs concurrently:
+Submit GRU4Rec, NARM, and Pop training jobs concurrently:
 
 ```bash
 bash submit_training.sh
 ```
 
-This dispatches two Slurm jobs via `run_training.sbatch`, each tagged with a distinct `--job-name` so their logs do not collide. `run_training.sbatch` requires the model name as `$1` and exits with code 2 if it is missing; preprocessing is no longer part of this sbatch, so concurrent training jobs cannot race on the `.inter` files.
+This dispatches three Slurm jobs via `run_training.sbatch`, each tagged with a distinct `--job-name` so their logs do not collide. `run_training.sbatch` requires the model name as `$1` and exits with code 2 if it is missing; preprocessing is no longer part of this sbatch, so concurrent training jobs cannot race on the `.inter` files.
 
 To train a single model by hand:
 
@@ -125,13 +125,13 @@ Logs are written to `slurm_logs/training_<JobName>_out.txt` and `slurm_logs/trai
 
 ### Evaluation
 
-Evaluate the most recent GRU4Rec and NARM checkpoints on the test set:
+Evaluate the most recent GRU4Rec, NARM, and Pop checkpoints on the test set:
 
 ```bash
 bash submit_evaluation.sh
 ```
 
-`run_evaluation.sbatch` takes the model name as `$1` and forwards it to `scripts/evaluate.py --model <ModelName>`. The evaluator globs `saved/<ModelName>*.pth`, selects the newest file by modification time, and prints MRR@100 and Recall@100 as JSON to stdout.
+`run_evaluation.sbatch` takes the model name as `$1` and forwards it to `scripts/evaluate.py --model <ModelName>`. The evaluator globs `saved/<ModelName>*.pth`, selects the newest file by modification time, and prints MRR@100, Recall@100, and NDCG@100 as JSON to stdout.
 
 To evaluate a single model by hand:
 
@@ -146,7 +146,8 @@ Logs are written to `slurm_logs/evaluation_<JobName>_out.txt` and `slurm_logs/ev
 | Model   | Type     | Status    |
 | ------- | -------- | --------- |
 | GRU4Rec | Baseline | Trained   |
-| NARM    | Baseline | Planned   |
+| NARM    | Baseline | Trained   |
+| Pop     | Baseline | Training  |
 | TBD     | Novel    | In design |
 
 ## Known Issues

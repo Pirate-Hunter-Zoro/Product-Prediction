@@ -15,7 +15,7 @@ benchmark_filename: ['train', 'valid', 'test']
 filter_inter_by_user_or_item: False # Do not filter out sessions/items with few interactions
 alias_of_item_id: ['item_id_list'] # Build vocabulary from all item occurrences (not just targets)
 
-metrics: ['MRR', 'Recall']
+metrics: ['MRR', 'Recall', 'NDCG']
 topk: [100]                                                                                                                            
 valid_metric: 'MRR@100'  
 
