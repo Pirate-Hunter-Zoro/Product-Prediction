@@ -276,6 +276,30 @@ COMPLETED
       4 decimals -- config mutation did not disturb the eval
       path. NDCG sits between MRR and Recall for both deep
       models, as top-K ranking math requires.
+[x] Evaluation scope decision documented (2026-04-20):
+    - Primary results on all 6 locales; paper-parity "Overall
+      (UK/DE/JP)" row reported alongside for Table 3 comparison.
+    - Recorded under README.md "### Evaluation > #### Scope".
+[x] Installed matplotlib into amazon-m2-venv (2026-04-20):
+    - pip install matplotlib under PYTHONNOUSERSITE=1; resolved to
+      3.10.8 with transitive deps contourpy, cycler, fonttools,
+      kiwisolver, pyparsing. numpy 1.23.5 pin held.
+    - create_env.sh already installs matplotlib on rebuild, so this
+      brought the live env in sync with a clean rebuild rather than
+      adding a new dep. No reproducibility gap.
+[x] create_env.sh dependency-order fix (2026-04-20):
+    - Moved matplotlib to LAST pip install line so it resolves
+      against the already-pinned numpy<1.24.0 (previously first,
+      risking ABI mismatch from post-hoc numpy downgrade of
+      matplotlib's compiled extensions).
+    - Added --no-user to the matplotlib line for consistency with
+      every other pip install line in the file (PYTHONNOUSERSITE=1
+      already covered it, but belt-and-suspenders).
+    - Added a matplotlib.pyplot smoke test after the existing
+      import-check line so an ABI break fails the env build
+      immediately rather than surfacing at first plot call.
+    - Full rebuild submitted 2026-04-20; confirm the smoke test
+      line prints "ok" before trusting the env.
 
 
 IN PROGRESS
@@ -286,16 +310,7 @@ IN PROGRESS
 REMAINING WORK
 --------------
 EVALUATION COVERAGE (paper-matching):
-[ ] *** NEXT *** Decide evaluation scope and document the choice:
-    (a) Evaluate on all 6 locales (current behavior) -- cleaner
-        story but "Overall" numbers are not directly comparable
-        to Table 3.
-    (b) Filter test to UK/DE/JP only, matching paper Task 1 --
-        enables direct comparison but discards ~9% of test
-        sessions.
-    Recommendation: do (a) for primary results and add a
-    UK/DE/JP-only row in the final table for paper comparison.
-[ ] Per-locale breakdown: extend evaluate.py to consume the
+[ ] *** NEXT *** Per-locale breakdown: extend evaluate.py to consume the
     per-locale test .inter files. Infrastructure is in place:
       - data/amazon_m2/locale_map.parquet  (from locale_map.py)
       - data/amazon_m2/amazon_m2.test_<locale>.inter for all six

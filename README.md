@@ -69,8 +69,8 @@ Key dependencies:
 - Python 3.10
 - PyTorch (CUDA 11.8)
 - RecBole 1.2.0
-- numpy < 2.0
-- ray[tune], kmeans-pytorch, setuptools
+- numpy < 1.24.0
+- ray[tune], kmeans-pytorch, setuptools < 80, matplotlib
 
 ### VS Code (development)
 
@@ -131,6 +131,10 @@ sbatch --job-name=<ModelName> run_training.sbatch <ModelName>
 Logs are written to `slurm_logs/training_<JobName>_out.txt` and `slurm_logs/training_<JobName>_err.txt`.
 
 ### Evaluation
+
+#### Scope
+
+Primary results are reported across all six locales (UK, DE, JP, IT, FR, ES) unioned into a single "Overall" number. A secondary "Overall (UK/DE/JP)" row is reported alongside to enable direct comparison to Amazon-M2 paper Table 3, which evaluates Task 1 on the three large locales only. The two "Overall" numbers live in different universes and must always be labeled with their scope when cited.
 
 Evaluate the most recent GRU4Rec, NARM, and Pop checkpoints on the test set:
 
