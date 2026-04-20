@@ -33,10 +33,12 @@ scripts/
   evaluate.py              Standalone evaluation of saved checkpoints
   locale_map.py            Builds session_id -> locale lookup (parquet)
   split_test_by_locale.py  Splits test.inter into per-locale test_<locale>.inter files
+  pop_baseline.py          Hand-rolled Popularity baseline (global + session-aware)
 create_env.sh              Conda environment setup (cluster)
 run_preprocessing.sbatch   Slurm job for preprocessing (CPU only)
 run_training.sbatch        Slurm job for training (takes model name as $1)
 run_evaluation.sbatch      Slurm job for evaluation (takes model name as $1)
+run_pop_evaluation.sbatch  Slurm job for pop_baseline.py (CPU only, ~1 min)
 submit_training.sh         Wrapper: submits GRU4Rec, NARM, and Pop training jobs
 submit_evaluation.sh       Wrapper: submits GRU4Rec, NARM, and Pop evaluation jobs
 data_investigation.ipynb   Initial data exploration
@@ -146,13 +148,23 @@ sbatch --job-name=<ModelName> run_evaluation.sbatch <ModelName>
 
 Logs are written to `slurm_logs/evaluation_<JobName>_out.txt` and `slurm_logs/evaluation_<JobName>_err.txt`.
 
+#### Pop baseline (special case)
+
+RecBole's built-in `Pop` model is a `GeneralRecommender` and is incompatible with this project's sequential configuration (`benchmark_filename`, `alias_of_item_id`, session_id as `USER_ID_FIELD`). Training "succeeds" but produces garbage popularity counts (~0.0002 MRR). Pop is therefore evaluated through a hand-rolled script that reads the `.inter` files directly:
+
+```bash
+sbatch run_pop_evaluation.sbatch
+```
+
+This runs `scripts/pop_baseline.py` on CPU, completes in roughly one minute, and prints two JSON blocks to stdout — one for global-Pop ranking, one for session-aware Pop. Session-aware is reported as a negative-result baseline: on Task 1 data the `next_item` is disjoint from `prev_items` on every row by construction, so session-aware Pop cannot outperform global Pop. Both numbers appear in the final results table.
+
 ## Models
 
 | Model   | Type     | Status    |
 | ------- | -------- | --------- |
 | GRU4Rec | Baseline | Trained, evaluated |
 | NARM    | Baseline | Trained, evaluated |
-| Pop     | Baseline | Trained, evaluating |
+| Pop     | Baseline | Evaluated (hand-rolled, see `scripts/pop_baseline.py`) |
 | TBD     | Novel    | In design |
 
 ## Known Issues

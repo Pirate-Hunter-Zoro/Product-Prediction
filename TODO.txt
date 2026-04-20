@@ -196,21 +196,64 @@ COMPLETED
       ES 8,793), wc -l sum matches original test.inter line count.
     - Per-locale test counts are within rounding of 10% of the
       full-dataset locale counts -- seeded 80/10/10 split is stable.
+[x] Attempted RecBole Pop evaluation (2026-04-19, job 1861275):
+    - Metrics catastrophically low: MRR@100 = 0.0002,
+      Recall@100 = 0.0033, NDCG@100 = 0.0007. Three orders of
+      magnitude below paper Table 3 (MRR 0.2426).
+    - Root cause: RecBole's Pop is a GeneralRecommender, but our
+      config.yaml is sequential (benchmark_filename,
+      alias_of_item_id, session_id as USER_ID_FIELD). The
+      model-type / data-shape mismatch poisons popularity counts.
+      Confirmed by the training log showing the same near-zero
+      metrics at validation -- not an eval-side bug.
+    - Decision: abandon RecBole Pop, hand-roll the baseline.
+[x] scripts/pop_baseline.py (2026-04-20):
+    - Pure-Python, no RecBole. Reads amazon_m2.{train,test}.inter
+      directly.
+    - build_popularity_ranking: counts every item across
+      item_id_list:token_seq histories + item_id:token targets in
+      train.inter; returns (top-K list, full Counter).
+    - score_test_set: builds a 1-indexed rank dict, iterates test
+      targets, accumulates MRR/Recall/NDCG@100 with denominator =
+      total test rows (not just hits).
+    - score_test_set_session_aware: for each test row, ranks the
+      session's own items by (in-session count desc, global count
+      desc) and pads with global top items up to K. Kept as a
+      second baseline row even though it underperforms global --
+      a correctly-implemented negative result at 1.4M-item scale.
+    - main runs both modes back-to-back, prints two labeled JSON
+      blocks to stdout.
+    - Companion sbatch: run_pop_evaluation.sbatch (c3_short, CPU
+      only, runs in ~1 minute).
+[x] Pop evaluation results (2026-04-20, job 1861779):
+    - Global Pop : MRR@100 = 0.000127, Recall@100 = 0.00180,
+                   NDCG@100 = 0.000405
+    - Session Pop: MRR@100 = 0.0000685, Recall@100 = 0.00174,
+                   NDCG@100 = 0.000348
+    - Session-aware is WORSE than global. Empirical check: 0 of
+      360,625 test targets appear in their own session history.
+      Task 1 data format holds next_item disjoint from prev_items
+      on every row by construction, so session-aware Pop only
+      displaces real top-100 items without ever matching.
+    - Math ceiling on our split: MRR <= Recall = 0.00180. Paper's
+      0.2426 MRR for Popularity is unreachable on our 10% slice of
+      sessions_train.csv. Their setup must differ (likely the
+      official KDD Cup task1 test set, per-locale candidate
+      vocab, or a leave-one-out protocol where targets can appear
+      in history). Not reproducible without their code.
+    - Decision: report both numbers honestly in the final table;
+      one sentence caveat about the paper-protocol gap.
 
 
 IN PROGRESS
 -----------
-[ ] Pop test evaluation (job 1861275, submitted 2026-04-19).
-    Run via `sbatch --job-name=Pop run_evaluation.sbatch Pop`.
-    Expected per paper Table 3: MRR@100 ~0.24, Recall@100 ~0.48 on
-    UK/DE/JP-only; our all-6-locales "Overall" may drift slightly.
-    Log: slurm_logs/evaluation_Pop_out.txt.
+(none -- see REMAINING WORK)
 
 
 REMAINING WORK
 --------------
 BASELINE EXPERIMENTS:
-[ ] Decide how GRU4Rec and NARM get NDCG@100 numbers. Their
+[ ] *** NEXT *** NDCG@100 backfill for GRU4Rec and NARM. Their
     checkpoints embed the pre-NDCG config, so a plain
     evaluate.py run will not produce NDCG. Options:
     (a) Pass a config override to trainer.evaluate / re-load
@@ -218,7 +261,8 @@ BASELINE EXPERIMENTS:
         in the metrics list. Cheapest if RecBole cooperates.
     (b) Re-train both models under the new config. Clean but
         ~10 hrs each.
-    Recommendation: try (a) first.
+    Recommendation: try (a) first. Pop already has NDCG -- it
+    is computed directly inside scripts/pop_baseline.py.
 
 EVALUATION COVERAGE (paper-matching):
 [ ] Decide evaluation scope and document the choice:
@@ -311,12 +355,16 @@ scripts/train.py                 - Training entrypoint
 scripts/evaluate.py              - Standalone evaluation of saved checkpoints
 scripts/locale_map.py            - Builds session_id -> locale parquet lookup
 scripts/split_test_by_locale.py  - Splits test.inter into per-locale slices
+scripts/pop_baseline.py          - Hand-rolled Popularity baseline
+                                   (global + session-aware modes)
 create_env.sh                    - Environment setup
 run_preprocessing.sbatch         - Slurm job script for preprocessing
 run_training.sbatch              - Parameterized Slurm job script for training
                                    (takes model name as $1)
 run_evaluation.sbatch            - Parameterized Slurm job script for eval
                                    (takes model name as $1)
+run_pop_evaluation.sbatch        - Slurm job for pop_baseline.py (CPU only,
+                                   ~1 minute; bypasses RecBole entirely)
 submit_training.sh               - Wrapper that submits GRU4Rec + NARM + Pop jobs
 submit_evaluation.sh             - Wrapper that submits GRU4Rec + NARM + Pop eval
 data_investigation.ipynb         - Initial data exploration
@@ -363,6 +411,21 @@ KNOWN ISSUES / GOTCHAS
 - Paper Task 1 evaluation scope is UK/DE/JP only, so paper "Overall"
   numbers are NOT the same universe as our all-6-locales "Overall".
   Always label evaluation scope when comparing.
+- Amazon-M2 Task 1 format: sessions_train.csv packages each session
+  as (prev_items, next_item) where next_item is the held-out last
+  click and prev_items is everything before it. They are disjoint on
+  every row by construction -- verified empirically (0 of 360,625
+  test targets appear in their own history). This invalidates any
+  naive "session-aware Pop" baseline and blocks reproduction of
+  paper Table 3's Popularity MRR on our 80/10/10 split. Paper's
+  protocol must differ (likely the official KDD Cup task1 test set
+  or a leave-one-out split). Do NOT spend effort chasing the 0.24
+  MRR number unless willing to change the evaluation protocol.
+- RecBole's Pop is a GeneralRecommender and is INCOMPATIBLE with
+  our sequential config (benchmark_filename, alias_of_item_id,
+  session_id as USER_ID_FIELD). Training "succeeds" but produces
+  garbage popularity counts (~0.0002 MRR). Use scripts/pop_baseline.py
+  instead -- hand-rolled, independent of RecBole.
 - Interactive-shell `python` may NOT be the venv python even when the
   venv prompt prefix is showing. On the cluster, if the Anaconda3
   module has been loaded in the same shell, `which python` can resolve

@@ -5,4 +5,4 @@ set -e
 
 sbatch --job-name=GRU4Rec run_evaluation.sbatch GRU4Rec
 sbatch --job-name=NARM run_evaluation.sbatch NARM
-sbatch --job-name=Pop run_evaluation.sbatch Pop
+sbatch run_pop_evaluation.sbatch
