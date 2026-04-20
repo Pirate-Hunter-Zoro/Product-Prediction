@@ -17,6 +17,12 @@ if [ -z "$MODEL" ]; then
     echo "Unspecified Model...." >&2
     exit 2
 fi
+shift # Consume the first model argument
+EXTRA_ARGS=""
+if [ "$#" -gt 0 ]; then
+    # More arguments
+    EXTRA_ARGS="--extra-metrics $@"
+fi
 
 # ---- Conda configuration ----
 CONDA_ENV=amazon-m2-venv
@@ -36,4 +42,4 @@ mkdir -p slurm_logs
 # Explicitly pass the memory limit to srun to resolve the conflict
 which python
 python -c "import recbole; print(recbole.__file__)"
-python scripts/evaluate.py --model "$MODEL"
+python scripts/evaluate.py --model "$MODEL" $EXTRA_ARGS # Note that $EXTRA_ARGS is unquoted due to the fact that it should be potentially multiple arguments

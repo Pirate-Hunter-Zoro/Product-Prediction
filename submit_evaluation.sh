@@ -3,6 +3,6 @@
 # Exit immediately if any command fails
 set -e
 
-sbatch --job-name=GRU4Rec run_evaluation.sbatch GRU4Rec
-sbatch --job-name=NARM run_evaluation.sbatch NARM
+sbatch --job-name=GRU4Rec run_evaluation.sbatch GRU4Rec NDCG
+sbatch --job-name=NARM run_evaluation.sbatch NARM NDCG
 sbatch run_pop_evaluation.sbatch
