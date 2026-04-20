@@ -243,6 +243,39 @@ COMPLETED
       in history). Not reproducible without their code.
     - Decision: report both numbers honestly in the final table;
       one sentence caveat about the paper-protocol gap.
+[x] NDCG@100 backfill for GRU4Rec and NARM (2026-04-20):
+    - Chose option (a) from the original plan: config override
+      at eval time, no retraining.
+    - scripts/evaluate.py: added extra_metrics list[str] kwarg
+      to evaluate(); mutates config["metrics"] via set-union
+      AFTER load_data_and_model and BEFORE get_trainer so the
+      Evaluator picks up the augmented metric list. Logs the
+      final metrics list to stdout so the slurm log confirms
+      the override took effect.
+    - run_evaluation.sbatch: now accepts $1 = MODEL (required,
+      guarded) plus $2..$N = optional metric names. Unconditional
+      shift after the MODEL guard, then EXTRA_ARGS is populated
+      as "--extra-metrics $@" only when extras remain. Passed
+      unquoted into the python call so argparse nargs="+" sees
+      word-split tokens.
+    - submit_evaluation.sh: GRU4Rec and NARM lines append NDCG
+      after the model name. Pop line untouched -- Pop computes
+      NDCG directly inside pop_baseline.py.
+    - Gotcha: argparse is strict on hyphens. CLI flag must be
+      --extra-metrics; the namespace attribute is args.extra_metrics
+      (argparse auto-translates hyphens to underscores only in
+      that direction). First submission (jobs 1861785/1861786)
+      crashed with "unrecognized arguments: --extra-metrics NDCG"
+      because add_argument used --extra_metrics. Fixed.
+    - Second submission (jobs 1861788/1861789, 2026-04-20) clean.
+    - Results (seeded split, all-6-locale test):
+        GRU4Rec: MRR 0.1609, Recall 0.3852, NDCG 0.2061
+        NARM   : MRR 0.1522, Recall 0.3637, NDCG 0.1951
+        Pop    : MRR 0.0001, Recall 0.0018, NDCG 0.0004
+      GRU4Rec and NARM MRR/Recall match pre-backfill values to
+      4 decimals -- config mutation did not disturb the eval
+      path. NDCG sits between MRR and Recall for both deep
+      models, as top-K ranking math requires.
 
 
 IN PROGRESS
@@ -252,20 +285,8 @@ IN PROGRESS
 
 REMAINING WORK
 --------------
-BASELINE EXPERIMENTS:
-[ ] *** NEXT *** NDCG@100 backfill for GRU4Rec and NARM. Their
-    checkpoints embed the pre-NDCG config, so a plain
-    evaluate.py run will not produce NDCG. Options:
-    (a) Pass a config override to trainer.evaluate / re-load
-        the model with an augmented config that includes NDCG
-        in the metrics list. Cheapest if RecBole cooperates.
-    (b) Re-train both models under the new config. Clean but
-        ~10 hrs each.
-    Recommendation: try (a) first. Pop already has NDCG -- it
-    is computed directly inside scripts/pop_baseline.py.
-
 EVALUATION COVERAGE (paper-matching):
-[ ] Decide evaluation scope and document the choice:
+[ ] *** NEXT *** Decide evaluation scope and document the choice:
     (a) Evaluate on all 6 locales (current behavior) -- cleaner
         story but "Overall" numbers are not directly comparable
         to Table 3.

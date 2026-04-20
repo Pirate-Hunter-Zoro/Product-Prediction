@@ -34,7 +34,7 @@ def evaluate(model_file: Path, extra_metrics:list[str]=None):
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="GRU4Rec", type=str, required=False, help="Name of the model, defaults to GRU4Rec")
-    parser.add_argument("--extra_metrics", type=str, nargs="+", default=None, help="space-separated metric names to union into the checkpoint's metric list")
+    parser.add_argument("--extra-metrics", type=str, nargs="+", default=None, help="space-separated metric names to union into the checkpoint's metric list")
     args = parser.parse_args()
     model_name = args.model
     model_name = sorted(list(Path("saved/").glob(f"{model_name}*.pth")), key=lambda x: x.stat().st_mtime, reverse=True)[0]

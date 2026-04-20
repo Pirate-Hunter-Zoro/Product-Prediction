@@ -138,12 +138,20 @@ Evaluate the most recent GRU4Rec, NARM, and Pop checkpoints on the test set:
 bash submit_evaluation.sh
 ```
 
-`run_evaluation.sbatch` takes the model name as `$1` and forwards it to `scripts/evaluate.py --model <ModelName>`. The evaluator globs `saved/<ModelName>*.pth`, selects the newest file by modification time, and prints MRR@100, Recall@100, and NDCG@100 as JSON to stdout.
+`run_evaluation.sbatch` takes the model name as `$1` and zero or more extra metric names as `$2..$N`, forwarding the extras to `scripts/evaluate.py` as `--extra-metrics <names>`. The evaluator globs `saved/<ModelName>*.pth`, selects the newest file by modification time, unions any `--extra-metrics` into the checkpoint's stored `config["metrics"]` before instantiating the trainer, and prints the resulting metric dictionary as JSON to stdout.
 
-To evaluate a single model by hand:
+The extras mechanism exists so that NDCG@100 can be computed on GRU4Rec and NARM checkpoints that were trained before NDCG was added to `config.yaml`, without retraining. `submit_evaluation.sh` appends `NDCG` after the model name for both deep baselines. Pop is evaluated through a separate hand-rolled script and already reports NDCG directly.
+
+To evaluate a single model by hand (without extras):
 
 ```bash
 sbatch --job-name=<ModelName> run_evaluation.sbatch <ModelName>
+```
+
+To evaluate a single model by hand with NDCG@100 backfilled:
+
+```bash
+sbatch --job-name=<ModelName> run_evaluation.sbatch <ModelName> NDCG
 ```
 
 Logs are written to `slurm_logs/evaluation_<JobName>_out.txt` and `slurm_logs/evaluation_<JobName>_err.txt`.
