@@ -280,6 +280,62 @@ COMPLETED
     - Primary results on all 6 locales; paper-parity "Overall
       (UK/DE/JP)" row reported alongside for Table 3 comparison.
     - Recorded under README.md "### Evaluation > #### Scope".
+[x] Per-locale evaluation in evaluate.py (2026-04-20, jobs
+    1864455 GRU4Rec / 1864456 NARM):
+    - New function evaluate_per_locale(model_file, extra_metrics,
+      data_dir, locales). Loads model once via load_data_and_model,
+      applies extra_metrics union, builds trainer once.
+    - Reads amazon_m2.test_<locale>.inter per locale; casts
+      session_id:token to str; translates to internal IDs via
+      dataset.token2id("session_id", tokens).
+    - Per locale: torch.isin mask on session_id column of
+      test_data._dataset.inter_feat, tensor-indexes every column
+      of the underlying inter_feat.interaction dict with the mask
+      (NOT via Interaction.__getitem__, which silently misreads
+      bool masks as int indices), wraps the filtered dict in a
+      fresh Interaction, shallow-copies the SequentialDataset,
+      swaps inter_feat on the copy, constructs a new
+      FullSortEvalDataLoader(config, sub_ds, sampler=None,
+      shuffle=False), and calls trainer.evaluate. Sampler=None is
+      safe because the sequential branch of FullSortEvalDataLoader
+      never touches it.
+    - Overall pass runs LAST on the untouched test_data, guarding
+      against any future copy-hygiene regression silently
+      corrupting the headline number.
+    - Emits one JSON dict with seven keys: UK, DE, JP, IT, FR, ES,
+      Overall. Original single-dict evaluate() was removed; there
+      is no --per-locale flag (this is always on). Pop is
+      untouched -- it has its own path through pop_baseline.py.
+    - Extended the same run to emit an eighth key "Overall
+      (UK/DE/JP)" computed as a session-count-weighted average of
+      the UK/DE/JP rows (denominator = 327,319). Exact by
+      construction since MRR/Recall/NDCG are all row-wise means,
+      so no second eval pass is needed. Mirrors paper Table 3's
+      Task 1 evaluation universe for direct comparison.
+      Resubmit jobs 1864464 GRU4Rec / 1864465 NARM.
+      Weighted results:
+        GRU4Rec: 0.1551 / 0.3702 / 0.1984
+        NARM   : 0.1470 / 0.3493 / 0.1880
+        (MRR / Recall / NDCG, all @100)
+    - Sanity: per-locale session counts (UK 118,320; DE 110,985;
+      JP 98,014; IT 12,731; FR 11,782; ES 8,793) sum exactly to
+      360,625 test rows. Overall MRR/Recall/NDCG for both
+      GRU4Rec and NARM reproduce their pre-per-locale values
+      byte-identically -- no filter leak.
+    - Results (seeded split):
+        GRU4Rec: UK 0.1466/0.3566/0.1887  DE 0.1404/0.3583/0.1841
+                 JP 0.1819/0.4001/0.2263  IT 0.2080/0.5205/0.2717
+                 FR 0.2301/0.5498/0.2954  ES 0.2173/0.5263/0.2801
+                 Overall 0.1609/0.3852/0.2061
+        NARM   : UK 0.1404/0.3375/0.1803  DE 0.1324/0.3381/0.1738
+                 JP 0.1715/0.3761/0.2135  IT 0.1922/0.4951/0.2541
+                 FR 0.2167/0.5238/0.2796  ES 0.2002/0.4971/0.2609
+                 Overall 0.1522/0.3637/0.1951
+      (MRR / Recall / NDCG, all @100)
+    - Overall (UK/DE/JP) paper-parity row is NOT emitted yet;
+      it's an exact weighted average of the three per-locale
+      numbers by session count, computable post-hoc in the
+      report without a second eval pass.
 [x] Installed matplotlib into amazon-m2-venv (2026-04-20):
     - pip install matplotlib under PYTHONNOUSERSITE=1; resolved to
       3.10.8 with transitive deps contourpy, cycler, fonttools,
@@ -309,22 +365,8 @@ IN PROGRESS
 
 REMAINING WORK
 --------------
-EVALUATION COVERAGE (paper-matching):
-[ ] *** NEXT *** Per-locale breakdown: extend evaluate.py to consume the
-    per-locale test .inter files. Infrastructure is in place:
-      - data/amazon_m2/locale_map.parquet  (from locale_map.py)
-      - data/amazon_m2/amazon_m2.test_<locale>.inter for all six
-        locales (from split_test_by_locale.py).
-    Remaining work is evaluate.py only: iterate locales, point
-    the test loader at the per-locale .inter for each (via a
-    benchmark_filename override on load_data_and_model or by
-    swapping test_data.dataset.inter_feat), call trainer.evaluate
-    per locale, and emit a single JSON keyed by locale
-    (UK/DE/JP/IT/FR/ES) plus Overall (the original full-test run).
-    Mirrors paper Table 3 layout.
-
 NOVEL METHOD:
-[ ] Design the novel contribution. Ideas ranked by how well the
+[ ] *** NEXT *** Design the novel contribution. Ideas ranked by how well the
     paper motivates them:
     - Text-attribute integration that goes beyond naive BERT
       averaging. Table 5 of the paper shows naive Multilingual

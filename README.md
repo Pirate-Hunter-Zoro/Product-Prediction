@@ -134,7 +134,7 @@ Logs are written to `slurm_logs/training_<JobName>_out.txt` and `slurm_logs/trai
 
 #### Scope
 
-Primary results are reported across all six locales (UK, DE, JP, IT, FR, ES) unioned into a single "Overall" number. A secondary "Overall (UK/DE/JP)" row is reported alongside to enable direct comparison to Amazon-M2 paper Table 3, which evaluates Task 1 on the three large locales only. The two "Overall" numbers live in different universes and must always be labeled with their scope when cited.
+Primary results are reported across all six locales (UK, DE, JP, IT, FR, ES) unioned into a single "Overall" number, plus one row per locale. A secondary "Overall (UK/DE/JP)" row is emitted alongside as a session-count-weighted average of the UK, DE, and JP per-locale rows (denominator = 327,319 test sessions) to enable direct comparison to Amazon-M2 paper Table 3, which evaluates Task 1 on the three large locales only. Because MRR@100, Recall@100, and NDCG@100 are all row-wise means, the weighted average is exact and requires no second evaluation pass. The two "Overall" numbers live in different universes and must always be labeled with their scope when cited.
 
 Evaluate the most recent GRU4Rec, NARM, and Pop checkpoints on the test set:
 
@@ -142,9 +142,9 @@ Evaluate the most recent GRU4Rec, NARM, and Pop checkpoints on the test set:
 bash submit_evaluation.sh
 ```
 
-`run_evaluation.sbatch` takes the model name as `$1` and zero or more extra metric names as `$2..$N`, forwarding the extras to `scripts/evaluate.py` as `--extra-metrics <names>`. The evaluator globs `saved/<ModelName>*.pth`, selects the newest file by modification time, unions any `--extra-metrics` into the checkpoint's stored `config["metrics"]` before instantiating the trainer, and prints the resulting metric dictionary as JSON to stdout.
+`run_evaluation.sbatch` takes the model name as `$1` and zero or more extra metric names as `$2..$N`, forwarding the extras to `scripts/evaluate.py` as `--extra-metrics <names>`. The evaluator globs `saved/<ModelName>*.pth`, selects the newest file by modification time, unions any `--extra-metrics` into the checkpoint's stored `config["metrics"]` before instantiating the trainer, iterates the six per-locale `amazon_m2.test_<locale>.inter` files, and prints a single JSON dict to stdout with eight keys: `UK`, `DE`, `JP`, `IT`, `FR`, `ES`, `Overall` (the full-test run), and `Overall (UK/DE/JP)` (the paper-parity weighted average of the three large locales, computed inline from the per-locale rows). The per-locale loop reuses the model and dataset vocab loaded once at the top — each locale builds a filtered `FullSortEvalDataLoader` by masking `test_data._dataset.inter_feat` on `session_id` via `dataset.token2id`, without retraining or reloading the checkpoint.
 
-The extras mechanism exists so that NDCG@100 can be computed on GRU4Rec and NARM checkpoints that were trained before NDCG was added to `config.yaml`, without retraining. `submit_evaluation.sh` appends `NDCG` after the model name for both deep baselines. Pop is evaluated through a separate hand-rolled script and already reports NDCG directly.
+The extras mechanism exists so that NDCG@100 can be computed on GRU4Rec and NARM checkpoints that were trained before NDCG was added to `config.yaml`, without retraining. `submit_evaluation.sh` appends `NDCG` after the model name for both deep baselines. Pop is evaluated through a separate hand-rolled script and already reports NDCG directly; it does not participate in the per-locale loop.
 
 To evaluate a single model by hand (without extras):
 
