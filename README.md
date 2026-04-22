@@ -35,15 +35,16 @@ scripts/
   split_test_by_locale.py  Splits test.inter into per-locale test_<locale>.inter files
   pop_baseline.py          Hand-rolled Popularity baseline (global + session-aware)
   build_item_attributes.py Builds per-item attribute parquet (item_id, title, brand, price, color) from products_train.csv filtered to the RecBole vocab
-  encode_titles.py         Encodes product titles with paraphrase-multilingual-MiniLM-L12-v2; writes aligned {item_ids, embeddings} tensor pickle
+  encode_text_attribute.py Encodes any text column from item_attributes.parquet with paraphrase-multilingual-MiniLM-L12-v2 (selected by --column {title,brand,color}); writes aligned {item_ids, embeddings} tensor pickle to data/amazon_m2/{column}_embeddings.pt
 create_env.sh              Conda environment setup (cluster)
 run_preprocessing.sbatch   Slurm job for preprocessing (CPU only)
 run_training.sbatch        Slurm job for training (takes model name as $1)
 run_evaluation.sbatch      Slurm job for evaluation (takes model name as $1)
 run_pop_evaluation.sbatch  Slurm job for pop_baseline.py (CPU only, ~1 min)
-run_encode_titles.sbatch   Slurm job for encode_titles.py (1 GPU, ~2 min at batch 256)
+run_encode_text_attributes.sbatch  Slurm job for encode_text_attribute.py (takes column name as $1; 1 GPU, ~2 min at batch 256)
 submit_training.sh         Wrapper: submits GRU4Rec, NARM, and Pop training jobs
 submit_evaluation.sh       Wrapper: submits GRU4Rec, NARM, and Pop evaluation jobs
+submit_embedding.sh        Wrapper: submits title, brand, and color encoding jobs with distinct --job-name values
 data_investigation.ipynb   Initial data exploration
 data/
   sessions_train.csv       Raw session data (gitignored)
@@ -53,7 +54,9 @@ data/
                              amazon_m2.test_<locale>.inter      (split_test_by_locale.py)
                              locale_map.parquet                 (locale_map.py)
                              item_attributes.parquet            (build_item_attributes.py)
-                             title_embeddings.pt                (encode_titles.py)
+                             title_embeddings.pt                (encode_text_attribute.py --column title)
+                             brand_embeddings.pt                (encode_text_attribute.py --column brand)
+                             color_embeddings.pt                (encode_text_attribute.py --column color)
 saved/                     Model checkpoints
 slurm_logs/                Slurm stdout/stderr logs
 ```
@@ -183,7 +186,7 @@ This runs `scripts/pop_baseline.py` on CPU, completes in roughly one minute, and
 | GRU4Rec | Baseline | Trained, evaluated |
 | NARM    | Baseline | Trained, evaluated |
 | Pop     | Baseline | Evaluated (hand-rolled, see `scripts/pop_baseline.py`) |
-| Cross-attention over item attributes | Novel    | In development (item-attribute parquet built; title embeddings cached via `scripts/encode_titles.py`; brand/price/color encoders + model class next) |
+| Cross-attention over item attributes | Novel    | In development (item-attribute parquet built; title/brand/color embeddings cached via `scripts/encode_text_attribute.py`; price bucketization + `SequentialRecommender` subclass next) |
 
 ## Known Issues
 

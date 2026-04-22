@@ -223,7 +223,7 @@ COMPLETED
       a correctly-implemented negative result at 1.4M-item scale.
     - main runs both modes back-to-back, prints two labeled JSON
       blocks to stdout.
-    - Companion sbatch: run_pop_evaluation.sbatch (c3_short, CPU
+    - Companion sbatch: run_pop_evaluation.sbatch (c3_accel, CPU
       only, runs in ~1 minute).
 [x] Pop evaluation results (2026-04-20, job 1861779):
     - Global Pop : MRR@100 = 0.000127, Recall@100 = 0.00180,
@@ -490,6 +490,85 @@ COMPLETED
         create_env.sh once died on line 13 with
         "bin/python: No such file or directory" even though the
         env existed. Retry worked. Not a script bug.
+[x] Generalized encode_titles.py into encode_text_attribute.py (2026-04-22):
+    - Renamed file scripts/encode_titles.py -> scripts/encode_text_attribute.py;
+      title_embeddings.pt on disk unchanged by the rename.
+    - Renamed functions: load_titles -> load_text_column (now takes a
+      second 'column' str argument; drops the hardcoded 'title' lookup
+      in favor of df[column]). encode_titles -> encode_texts (body
+      unchanged, parameter renamed to column_vals).
+    - Added required --column argparse flag with
+      choices={"title", "brand", "color"}. The choices set doubles
+      as a spelling guard -- unknown column names fail at argparse
+      time before the parquet is opened.
+    - Added --debug flag as action='store_true'. When set, the script
+      reloads the freshly-saved pickle and prints keys, shape, dtype,
+      and first-three-row norms. Replaces an earlier post-main debug
+      block that ran unconditionally and hardcoded title_embeddings.pt
+      (which would have polluted every brand/color slurm log with stale
+      title stats if left in place).
+    - Added --output default: when omitted, writes to
+      data/amazon_m2/{column}_embeddings.pt. Explicit --output still
+      overrides.
+    - Decisions locked during this session:
+      * Reuse paraphrase-multilingual-MiniLM-L12-v2 for brand and color
+        rather than a separate categorical embedding table. Same
+        384-dim space as title means the cross-attention layer sees
+        all text-attribute keys in one shared space. Matches paper
+        Table 5's text-fusion protocol (frozen pretrained embeddings).
+      * No HuggingFace embedder for price. No universal numerical
+        embedder exists because floats lack cross-domain distributional
+        semantics the way text does; tabular / time-series / LLM-digit
+        options all fail for this use case. Price gets its own bucket
+        path.
+      * Empty color strings ("") kept as their own category rather
+        than substituted with a sentinel. MiniLM returns a consistent
+        vector for "" across all items, so "no color specified"
+        becomes a legitimate learned signal.
+    - Bug gotchas found during construction, recorded for future
+      editors:
+      * argparse type=bool is a landmine. "type=bool, default=False"
+        does NOT create a boolean flag; it creates a flag that
+        consumes a value, so `--debug` alone crashes argparse with
+        "expected one argument". And bool("False") is True because
+        any non-empty string is truthy, so `--debug False` turns the
+        flag ON. Always use action='store_true' for boolean flags.
+      * Gating a dead debug block behind a hardcoded DEBUG=True
+        constant is NOT a fix. The condition always fires. Either
+        delete the block or wire it to a real CLI flag.
+[x] Renamed run_encode_titles.sbatch -> run_encode_text_attributes.sbatch
+    and parameterized it by column (2026-04-22):
+    - Reads column name from $1; fails fast with exit 2 + stderr
+      message if missing. Matches run_training.sbatch's arg-guard
+      pattern.
+    - Removed the hardcoded #SBATCH --job-name=encode_titles so
+      concurrent submissions do not collide on log files. Caller must
+      pass --job-name=<name> at sbatch invocation time; %x in -o/-e
+      lines resolves to that name.
+    - Python invocation: python scripts/encode_text_attribute.py
+      --batch-size 256 --column "$COLUMN" --debug. --debug is
+      unconditional in sbatch so every slurm log contains post-save
+      sanity output.
+[x] submit_embedding.sh wrapper (2026-04-22):
+    - Project root, modeled on submit_training.sh. Submits title,
+      brand, and color encoding jobs with distinct --job-name values
+      (embed_title, embed_brand, embed_color).
+    - Title re-submission is intentional: frozen deterministic model
+      + refactored script means byte-identical output is expected.
+      If the overwritten title_embeddings.pt changes size or content,
+      the refactor broke something. Cheap regression check at ~2 min
+      of GPU time.
+[x] Submitted jobs 1866393 (title), 1866394 (brand), 1866395 (color)
+    on 2026-04-22, queued into c3_short. Outputs pending at
+    session-close:
+    - data/amazon_m2/title_embeddings.pt (overwrite; byte-identical
+      expected)
+    - data/amazon_m2/brand_embeddings.pt (new, ~2.02 GiB expected)
+    - data/amazon_m2/color_embeddings.pt (new, ~2.02 GiB expected)
+    Post-run verification checklist: each --debug block in slurm logs
+    should show keys=['embeddings','item_ids'],
+    shape=(1393956, 384), dtype=torch.float32, norms==1.0000 on the
+    first three rows. Any drift = debug before moving on to price.
 
 
 IN PROGRESS
@@ -512,21 +591,43 @@ NOVEL METHOD:
     Paper Table 5 parity for the text-fusion ablation; see
     scripts/encode_titles.py completed-work entry above for the
     run summary and sanity checks.
-[ ] *** NEXT *** Encode the remaining three attribute columns into
-    tensors the cross-attention layer can consume. Open questions
-    to resolve before writing the encoders:
-    - brand (str): categorical embedding. Observed brand vocab
-      needs a min-frequency cutoff or feature hashing to avoid
-      blowing up the embedding table; long-tail brands appearing
-      once can collapse to a shared <OTHER> token.
-    - price (float): two options -- bucketize into quantile bins
-      + learned embedding, OR z-score + linear projection into
-      the attention dim. Bucketization is more robust to outliers;
-      continuous projection is simpler.
-    - color (str): categorical embedding, but 395,510 of
-      1,393,956 items have empty color. Treat "" as its own
-      category (a legitimate "no color specified" signal) rather
-      than as missing data.
+[x] Encode BRAND and COLOR columns (2026-04-22, in flight at
+    session-close; jobs 1866394 / 1866395). Same model as title
+    (paraphrase-multilingual-MiniLM-L12-v2, 384-dim, L2-normalized),
+    same script (scripts/encode_text_attribute.py --column <col>).
+    Rationale locked during design:
+    - brand: MiniLM embeddings instead of a categorical embedding
+      table. Reuse of the title model avoids a separate long-tail
+      cutoff / feature-hashing decision, keeps brand vectors in
+      the same 384-dim space as title for uniform cross-attention.
+    - color: same argument. Empty strings kept as their own
+      category -- MiniLM returns a consistent vector for "" across
+      all items, which is a legitimate "no color specified" signal.
+    Outputs: data/amazon_m2/brand_embeddings.pt and
+    data/amazon_m2/color_embeddings.pt, aligned {item_ids,
+    embeddings} dicts. Verify post-run -- see completed-work
+    submission entry above for the sanity checklist.
+[ ] *** NEXT *** Bucketize PRICE into a learnable embedding table.
+    Design locked (2026-04-22):
+    - 32 quantile bins, boundaries computed from TRAIN-set prices
+      only (no test leakage). Save boundaries alongside bin indices
+      so the same cut points reproduce at train and eval time.
+    - nn.Embedding(32, 384) inside the SequentialRecommender
+      subclass; initialized randomly, updated by the recommendation
+      loss. Lives in the same 384-dim space as the MiniLM attribute
+      vectors so the cross-attention layer treats all four
+      attribute slots uniformly.
+    - No HuggingFace embedder for price -- no universal numerical
+      embedder exists because floats lack cross-domain distributional
+      semantics the way text does. Decision recorded to avoid
+      re-litigating next session.
+    Suggested preprocessing output (to match the encode_* pattern):
+    - data/amazon_m2/price_bins.pt: {"item_ids": list[str],
+      "bin_idx": LongTensor[N]} aligned with the other embedding
+      files.
+    - data/amazon_m2/price_boundaries.pt: FloatTensor shape (31,),
+      the 31 quantile cut points that define the 32 bins. Load at
+      inference time to re-bucket any held-out prices consistently.
 [ ] Implement novel method as a RecBole SequentialRecommender
     subclass. Expected structure:
     - Sequence encoder (GRU or transformer) over the item_id_list
@@ -587,10 +688,17 @@ scripts/build_item_attributes.py - Builds per-item attribute parquet
                                    from products_train.csv filtered to
                                    the RecBole vocab (dedup by item_id,
                                    keep="first" locale row)
-scripts/encode_titles.py         - Encodes product titles with
+scripts/encode_text_attribute.py - Encodes any text column from
+                                   item_attributes.parquet via
                                    paraphrase-multilingual-MiniLM-L12-v2;
-                                   writes aligned {item_ids, embeddings}
-                                   pickle (1.39M rows, 384-dim, L2-norm)
+                                   column selected by --column (title,
+                                   brand, or color). --debug flag
+                                   (action='store_true') reloads the
+                                   freshly-saved pickle and prints a
+                                   sanity summary. Writes aligned
+                                   {item_ids, embeddings} pickle to
+                                   data/amazon_m2/{column}_embeddings.pt
+                                   (1.39M rows, 384-dim, L2-norm).
 create_env.sh                    - Environment setup
 run_preprocessing.sbatch         - Slurm job script for preprocessing
 run_training.sbatch              - Parameterized Slurm job script for training
@@ -599,11 +707,22 @@ run_evaluation.sbatch            - Parameterized Slurm job script for eval
                                    (takes model name as $1)
 run_pop_evaluation.sbatch        - Slurm job for pop_baseline.py (CPU only,
                                    ~1 minute; bypasses RecBole entirely)
-run_encode_titles.sbatch         - Slurm job for encode_titles.py (1 GPU,
-                                   1h walltime; full encode finishes in
-                                   ~2 min at batch 256)
+run_encode_text_attributes.sbatch - Slurm job for encode_text_attribute.py;
+                                    takes column name as $1 (required,
+                                    guarded with exit 2 if missing);
+                                    no hardcoded --job-name so concurrent
+                                    submissions do not collide on logs.
+                                    1 GPU, 1h walltime; ~2 min per column
+                                    at batch 256.
 submit_training.sh               - Wrapper that submits GRU4Rec + NARM + Pop jobs
 submit_evaluation.sh             - Wrapper that submits GRU4Rec + NARM + Pop eval
+submit_embedding.sh              - Wrapper that submits title, brand, and color
+                                   encoding jobs with distinct --job-name
+                                   values (embed_title, embed_brand,
+                                   embed_color). Title is intentionally
+                                   re-submitted as a byte-identical
+                                   regression check on the
+                                   encode_text_attribute.py refactor.
 data_investigation.ipynb         - Initial data exploration
 data/sessions_train.csv          - Raw session data (gitignored, scp'd to cluster)
 data/products_train.csv          - Raw product metadata (gitignored)
@@ -617,7 +736,20 @@ data/amazon_m2/title_embeddings.pt          - Per-item title embeddings
                                               ({"item_ids": list[str],
                                               "embeddings": FloatTensor
                                               [1393956, 384]}); float32,
-                                              L2-normalized; ~2.02 GiB
+                                              L2-normalized; ~2.02 GiB.
+data/amazon_m2/brand_embeddings.pt          - Per-item brand embeddings
+                                              (same schema as title);
+                                              generated by
+                                              encode_text_attribute.py
+                                              --column brand.
+data/amazon_m2/color_embeddings.pt          - Per-item color embeddings
+                                              (same schema as title);
+                                              empty color strings ("")
+                                              encoded as a consistent
+                                              MiniLM vector, kept as a
+                                              "no color specified"
+                                              signal rather than a
+                                              missing-data case.
 Amazon-M2-Session-Recommendation/  - Reference implementation (gitignored)
 Amazon-M2.pdf                    - Dataset paper (NeurIPS 2023 D&B)
 Final project instruction.pdf    - Course project spec
@@ -685,3 +817,10 @@ KNOWN ISSUES / GOTCHAS
   or re-activate cleanly: `module purge && module load
   Anaconda3/2025.06-0 && conda activate amazon-m2-venv` and re-check
   `which python`.
+- argparse type=bool is a landmine and does not do what the name
+  suggests. `parser.add_argument('--flag', type=bool, default=False)`
+  creates a flag that CONSUMES A VALUE -- `--flag` alone crashes
+  argparse with "expected one argument". And bool("False") is True
+  because any non-empty string is truthy in Python, so `--flag False`
+  turns the flag ON. Always use `action='store_true'` (or
+  `action='store_false'`) for boolean CLI flags. No type=, no default=.

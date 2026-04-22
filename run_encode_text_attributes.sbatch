@@ -1,5 +1,4 @@
 #!/bin/bash
-#SBATCH --job-name=encode_titles
 #SBATCH --partition=c3_accel
 #SBATCH --time=1:00:00
 #SBATCH --ntasks=1
@@ -11,6 +10,14 @@
 
 # Exit immediately if any command fails
 set -e
+
+COLUMN="$1"
+if [ -z "$COLUMN" ]; then
+    echo "Unspecified Column...." >&2
+    exit 2
+fi
+
+
 
 # ---- Conda configuration ----
 CONDA_ENV=amazon-m2-venv
@@ -29,4 +36,4 @@ mkdir -p slurm_logs
 
 which python
 python -c "import sentence_transformers; print(sentence_transformers.__version__)"
-python scripts/encode_titles.py --batch-size 256
+python scripts/encode_text_attribute.py --batch-size 256 --column "$COLUMN" --debug

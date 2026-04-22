@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=evaluation
-#SBATCH --partition=c3_short
+#SBATCH --partition=c3_accel
 #SBATCH --time=2:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
