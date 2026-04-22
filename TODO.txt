@@ -356,6 +356,140 @@ COMPLETED
       immediately rather than surfacing at first plot call.
     - Full rebuild submitted 2026-04-20; confirm the smoke test
       line prints "ok" before trusting the env.
+[x] Chose novel-method direction (2026-04-22): cross-attention over
+    per-item attributes. Query = session's ID-based sequence
+    representation (from a GRU or transformer encoder over the
+    item_id_list). Keys/values = a small bag of per-item attribute
+    tokens (title embedding + brand/price/color embeddings). Four
+    attribute "slots" per item. Motivation: paper Table 5 shows
+    naive multilingual Sentence-BERT title embeddings added to
+    SRGNN/GRU4Rec++ often HURT performance; paper text explicitly
+    calls effective text-feature fusion an open problem. Principled
+    fusion via cross-attention has citable open-problem motivation
+    straight from the authors. Alternatives rejected:
+    - Popularity-aware hybrid: our Pop MRR is 0.0001 -- no
+      signal to blend, dead on our split.
+    - Repeat-consumption: our Task 1 format holds next_item
+      disjoint from prev_items on every row; a copy mechanism
+      would copy zero targets.
+    - SKNN-augmented sequence model: heavier scope (retrieval
+      index over 3.6M sessions), no catalog-parity gain.
+    - Cross-locale Task 2: different task entirely, scope creep
+      masquerading as novelty.
+[x] scripts/build_item_attributes.py (2026-04-22):
+    - Reads data/products_train.csv (catalog dump, one row per
+      (id, locale)), keeps five columns (id, title, brand, price,
+      color), renames id -> item_id, fillna "" on the three text
+      columns. locale/size/model/material/author/desc dropped for
+      this first pass; revisit if cross-attention needs more
+      attribute slots.
+    - Builds item vocab from the union of item_id:token and
+      exploded item_id_list:token_seq columns across
+      amazon_m2.{train,valid,test}.inter; filters to string members
+      only via {v for v in vocab if isinstance(v, str)} to drop
+      NaN and empty-string sentinels that .explode() can leave
+      behind. Note: set.discard(float("nan")) does NOT work because
+      float("nan") != float("nan") -- use the isinstance filter.
+    - Filters products to rows whose item_id is in vocab, then
+      drop_duplicates(subset="item_id", keep="first") to collapse
+      per-locale duplicate rows down to one row per SKU.
+      keep="first" picks an arbitrary-but-deterministic locale;
+      multilingual handling (per-locale titles) is a future
+      decision if cross-attention encoding needs it.
+    - Writes data/amazon_m2/item_attributes.parquet:
+      item_id:object, title:object, brand:object, price:float64,
+      color:object. 1,393,956 rows. Zero nulls in any column.
+      Empty-string counts post-fillna: title 8, brand 18,923,
+      color 395,510 (legitimate catalog sparsity, not a bug).
+    - CLI: --products-csv, --inter-dir, --output, --nrows.
+      Defaults align with the rest of the pipeline.
+    - KEY FINDING: catalog_gap = len(vocab) -
+      filtered_products["item_id"].nunique() = 0. Every item
+      referenced in any session has a catalog row. Amazon-M2
+      authors curated the KDD Cup 2023 release to be internally
+      consistent -- they did not ship sessions containing items
+      whose catalog metadata they withheld. CONSEQUENCE: the novel
+      cross-attention model needs NO <UNK> attribute fallback, no
+      out-of-vocab branch, no imputation policy. Every item the
+      sequence encoder will ever see has title/brand/price/color
+      available.
+    - Diagnostic counterpart (Direction A): len(products) -
+      len(filtered_products) = 157,101 catalog rows with no
+      session appearance. Expected long-tail behavior; dropped by
+      the .isin(vocab) filter so the parquet only contains items
+      the model will actually rank.
+    - Bug gotchas found during construction, recorded for future
+      editors:
+      * pandas 2.x: df[col].fillna(v, inplace=True) operates on a
+        copy and triggers ChainedAssignmentError / FutureWarning.
+        Use df[[cols]] = df[[cols]].fillna(v) instead -- no
+        inplace kwarg.
+      * df[[cols]] = df[[cols]].fillna(v, inplace=True) is worse
+        than useless: fillna(inplace=True) returns None, so the
+        RHS is None and the three columns get assigned to NaN
+        wholesale. Silent data loss with only a SettingWithCopyWarning
+        to warn you.
+      * f-strings with nested double-quoted subscripts
+        (f"{d["k"]}") are a SyntaxError on Python 3.10/3.11
+        (PEP 701 only lifted this restriction in 3.12). Our env
+        is 3.10; use single quotes inside.
+[x] scripts/encode_titles.py + run_encode_titles.sbatch (2026-04-22):
+    - Two functions. load_titles(parquet_path) reads
+      item_attributes.parquet and returns aligned (item_ids, titles)
+      lists preserving row order so position i of one describes the
+      same SKU as position i of the other. encode_titles(titles,
+      model_path, device, batch_size) builds a SentenceTransformer,
+      calls .encode with show_progress_bar=True, convert_to_numpy=True,
+      normalize_embeddings=True, asserts shape == (N, 384), and
+      returns a CPU float32 torch tensor. L2 normalization is not
+      cosmetic -- it makes downstream dot-products cosine similarities
+      and matches paper Table 5's text-fusion protocol.
+    - main() wires argparse (--input, --output, --model, --device,
+      --batch-size, --nrows) to load_titles -> optional nrows
+      truncation (both lists, same slice) -> encode_titles -> save
+      {"item_ids": list[str], "embeddings": FloatTensor[N, 384]}
+      via torch.save. Callsite passes args.device directly; no
+      "cuda if available" silent-fallback so a missing GPU crashes
+      loud instead of producing a 1.39M-row CPU job.
+    - Download/cache: paraphrase-multilingual-MiniLM-L12-v2 fetched
+      once to /media/studies/ehr_study/analysis/mferguson/models/
+      paraphrase-multilingual-MiniLM-L12-v2 so runtime does no HF
+      network calls. Absolute path is the script default and the
+      create_env.sh smoke-line path; if the model ever moves, both
+      must move together.
+    - create_env.sh changes: added a pip line for sentence-transformers
+      that re-asserts "numpy<1.24.0" as a same-invocation constraint
+      (pip's resolver runs fresh per install; the pin must be re-stated
+      or scipy/sklearn can silently upgrade numpy past 1.24 and
+      reintroduce the np.float / np.float_ errors). matplotlib stays
+      LAST per the 2026-04-20 dependency-order fix. Import-smoke
+      line extended to import numpy + sentence_transformers and print
+      numpy.__version__ so a silent upgrade is visible in the rebuild
+      log. Final smoke line loads the model from disk and encodes
+      two strings; exercises sentencepiece compile at build time
+      rather than at first-use.
+    - Full-scale run: sbatch 1866337 on c3_accel, 1 GPU, batch 256,
+      ~2 minutes wall. Log shows sentence_transformers 5.4.1, Wrote
+      data/amazon_m2/title_embeddings.pt shape=(1393956, 384).
+      Post-run sanity: keys ['embeddings', 'item_ids'], 1,393,956
+      rows, torch.Size([1393956, 384]), dtype torch.float32, all
+      sampled row norms == 1.0000. File size 2,168,999,272 bytes
+      (~2.02 GiB).
+    - Bug gotchas found during construction, recorded for future
+      editors:
+      * load_titles returns a two-element tuple. Calling
+        `titles = load_titles(path)` instead of
+        `item_ids, titles = load_titles(path)` binds the tuple to
+        a mis-named variable, silently destroys alignment, and
+        drops item_ids entirely. Always unpack at the call site.
+      * torch.load on the saved dict needs weights_only=False under
+        PyTorch 2.6 because a dict containing a list[str] does not
+        satisfy the new safe-load allowlist. Same category of issue
+        as the RecBole checkpoint monkey-patch.
+      * Shared filesystem /media/studies/ can flap mid-rebuild;
+        create_env.sh once died on line 13 with
+        "bin/python: No such file or directory" even though the
+        env existed. Retry worked. Not a script bug.
 
 
 IN PROGRESS
@@ -366,35 +500,49 @@ IN PROGRESS
 REMAINING WORK
 --------------
 NOVEL METHOD:
-[ ] *** NEXT *** Design the novel contribution. Ideas ranked by how well the
-    paper motivates them:
-    - Text-attribute integration that goes beyond naive BERT
-      averaging. Table 5 of the paper shows naive Multilingual
-      Sentence-BERT embeddings of titles ADDED to SRGNN /
-      GRU4Rec++ often degrades performance. A principled fusion
-      (e.g. gated, attention-over-attributes, contrastive
-      alignment) has an open-problem citation straight from the
-      authors.
-    - Popularity-aware deep model. Paper Table 3 shows Popularity
-      dominates every deep model on MRR. A hybrid that blends a
-      popularity prior with a sequence model at inference (e.g.
-      logit interpolation, gated routing) has strong empirical
-      motivation.
-    - Repeat-consumption modeling. Paper Section 3 + Figure 2d
-      show ~35% of sessions contain repeats. Explicitly modeling
-      whether the next item is a repeat vs. a new item (two-
-      headed decoder, copy mechanism) is a clean, testable design.
-    - SKNN-augmented sequence model. Paper Figure 2f shows most
-      sessions have high-similarity neighbors. Adding an SKNN
-      retrieval branch that conditions the deep model is
-      data-driven.
-    - Cross-locale transfer (Task 2 framing). Heaviest scope but
-      the paper calls it out explicitly; a lightweight adapter or
-      shared-embedding scheme could work.
-[ ] Implement novel method as a RecBole SequentialRecommender subclass
-[ ] Train novel method on full dataset, record metrics
-[ ] Ablation experiments -- required regardless of which idea wins;
-    the paper's Table 5 is the template.
+[x] Design chosen (2026-04-22): cross-attention over per-item
+    attributes. See completed-work entry above for rationale.
+[x] Item-attribute parquet built (2026-04-22): see
+    scripts/build_item_attributes.py entry above. catalog_gap = 0
+    confirmed -- no <UNK> attribute fallback required.
+[x] Encode TITLE column (2026-04-22):
+    paraphrase-multilingual-MiniLM-L12-v2, 384-dim output,
+    L2-normalized, saved to data/amazon_m2/title_embeddings.pt as
+    {"item_ids": list[str], "embeddings": FloatTensor[N, 384]}.
+    Paper Table 5 parity for the text-fusion ablation; see
+    scripts/encode_titles.py completed-work entry above for the
+    run summary and sanity checks.
+[ ] *** NEXT *** Encode the remaining three attribute columns into
+    tensors the cross-attention layer can consume. Open questions
+    to resolve before writing the encoders:
+    - brand (str): categorical embedding. Observed brand vocab
+      needs a min-frequency cutoff or feature hashing to avoid
+      blowing up the embedding table; long-tail brands appearing
+      once can collapse to a shared <OTHER> token.
+    - price (float): two options -- bucketize into quantile bins
+      + learned embedding, OR z-score + linear projection into
+      the attention dim. Bucketization is more robust to outliers;
+      continuous projection is simpler.
+    - color (str): categorical embedding, but 395,510 of
+      1,393,956 items have empty color. Treat "" as its own
+      category (a legitimate "no color specified" signal) rather
+      than as missing data.
+[ ] Implement novel method as a RecBole SequentialRecommender
+    subclass. Expected structure:
+    - Sequence encoder (GRU or transformer) over the item_id_list
+      produces a session-state query vector.
+    - Per-item attribute bag is encoded into 4 key/value tokens
+      via the above column-specific encoders.
+    - Cross-attention layer: query = session state, keys/values =
+      attribute bag for each candidate item.
+    - Output logits = dot(session_state + attended_attributes,
+      item_embedding).
+[ ] Train novel method on full dataset, record metrics.
+[ ] Ablation experiments -- required regardless of result. The
+    paper's Table 5 is the template: add attribute types one at a
+    time (title only, title+brand, title+brand+price, all four)
+    and measure MRR/Recall/NDCG at each step. Per-locale slicing
+    already wired via evaluate.py; reuse it.
 
 PLOTS FOR REPORT (build after numbers are final; do NOT yak-shave
 plotting infrastructure ahead of results):
@@ -435,6 +583,14 @@ scripts/locale_map.py            - Builds session_id -> locale parquet lookup
 scripts/split_test_by_locale.py  - Splits test.inter into per-locale slices
 scripts/pop_baseline.py          - Hand-rolled Popularity baseline
                                    (global + session-aware modes)
+scripts/build_item_attributes.py - Builds per-item attribute parquet
+                                   from products_train.csv filtered to
+                                   the RecBole vocab (dedup by item_id,
+                                   keep="first" locale row)
+scripts/encode_titles.py         - Encodes product titles with
+                                   paraphrase-multilingual-MiniLM-L12-v2;
+                                   writes aligned {item_ids, embeddings}
+                                   pickle (1.39M rows, 384-dim, L2-norm)
 create_env.sh                    - Environment setup
 run_preprocessing.sbatch         - Slurm job script for preprocessing
 run_training.sbatch              - Parameterized Slurm job script for training
@@ -443,6 +599,9 @@ run_evaluation.sbatch            - Parameterized Slurm job script for eval
                                    (takes model name as $1)
 run_pop_evaluation.sbatch        - Slurm job for pop_baseline.py (CPU only,
                                    ~1 minute; bypasses RecBole entirely)
+run_encode_titles.sbatch         - Slurm job for encode_titles.py (1 GPU,
+                                   1h walltime; full encode finishes in
+                                   ~2 min at batch 256)
 submit_training.sh               - Wrapper that submits GRU4Rec + NARM + Pop jobs
 submit_evaluation.sh             - Wrapper that submits GRU4Rec + NARM + Pop eval
 data_investigation.ipynb         - Initial data exploration
@@ -450,6 +609,15 @@ data/sessions_train.csv          - Raw session data (gitignored, scp'd to cluste
 data/products_train.csv          - Raw product metadata (gitignored)
 data/amazon_m2/locale_map.parquet           - session_id -> locale lookup
 data/amazon_m2/amazon_m2.test_<loc>.inter   - Per-locale test slices
+data/amazon_m2/item_attributes.parquet      - Per-item attribute table
+                                              (item_id, title, brand,
+                                              price, color); 1,393,956
+                                              rows, one per vocab SKU
+data/amazon_m2/title_embeddings.pt          - Per-item title embeddings
+                                              ({"item_ids": list[str],
+                                              "embeddings": FloatTensor
+                                              [1393956, 384]}); float32,
+                                              L2-normalized; ~2.02 GiB
 Amazon-M2-Session-Recommendation/  - Reference implementation (gitignored)
 Amazon-M2.pdf                    - Dataset paper (NeurIPS 2023 D&B)
 Final project instruction.pdf    - Course project spec
