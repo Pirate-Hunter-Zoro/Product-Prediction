@@ -38,6 +38,7 @@ scripts/
   encode_text_attribute.py Encodes any text column from item_attributes.parquet with paraphrase-multilingual-MiniLM-L12-v2 (selected by --column {title,brand,color}); writes aligned {item_ids, embeddings} tensor pickle to data/amazon_m2/{column}_embeddings.pt
   bucketize_price.py       Bucketizes per-item price into 32 quantile bins (boundaries from TRAIN prices only); writes data/amazon_m2/price_bins.pt ({item_ids, bin_idx}) and data/amazon_m2/price_boundaries.pt (bare FloatTensor[31])
   attribute_loader.py      Model-side helpers that load the precomputed attribute artifacts into tensors indexed by RecBole internal item ID. load_text_embedding reads a {title,brand,color}_embeddings.pt pickle and returns FloatTensor[num_items, 384] with row 0 (PAD) zeroed. load_price_bins reads price_bins.pt and returns LongTensor[num_items] with row 0 = n_bins (reserved PAD sentinel) and rows 1..num_items-1 = bin index in [0, n_bins-1]. Both use vectorized dataset.token2id; neither is a CLI entry point.
+  novel_model.py           NovelModel(SequentialRecommender) subclass for the novel cross-attention method. __init__ is fully allocated: four register_buffer calls (title/brand/color text embeddings plus price_bin_idx), learnable item_embedding (padding_idx=0), emb_dropout, GRU (batch_first=True), three separate text projections (title_proj, brand_proj, color_proj) from 384 to hidden_size, price_embedding (nn.Embedding(n_price_bins + 1, hidden_size)), and cross_attn (nn.MultiheadAttention with batch_first=True). forward, calculate_loss, and full_sort_predict bodies are still stubs that raise NotImplementedError -- signatures are typed and documented. Config keys consumed but not yet present in config.yaml: TITLE_EMBEDDING_PATH, BRAND_EMBEDDING_PATH, COLOR_EMBEDDING_PATH, PRICE_BINS_PATH, n_price_bins, num_layers, dropout_prob, num_heads.
 create_env.sh              Conda environment setup (cluster)
 run_preprocessing.sbatch   Slurm job for preprocessing (CPU only)
 run_training.sbatch        Slurm job for training (takes model name as $1)
@@ -190,7 +191,7 @@ This runs `scripts/pop_baseline.py` on CPU, completes in roughly one minute, and
 | GRU4Rec | Baseline | Trained, evaluated |
 | NARM    | Baseline | Trained, evaluated |
 | Pop     | Baseline | Evaluated (hand-rolled, see `scripts/pop_baseline.py`) |
-| Cross-attention over item attributes | Novel    | In development (item-attribute parquet built; title/brand/color embeddings cached via `scripts/encode_text_attribute.py`; price bucketized into 32 quantile bins via `scripts/bucketize_price.py`; model-side loader helpers in `scripts/attribute_loader.py`; `SequentialRecommender` subclass next) |
+| Cross-attention over item attributes | Novel    | In development (item-attribute parquet built; title/brand/color embeddings cached via `scripts/encode_text_attribute.py`; price bucketized into 32 quantile bins via `scripts/bucketize_price.py`; model-side loader helpers in `scripts/attribute_loader.py`; `SequentialRecommender` subclass skeleton in `scripts/novel_model.py` with `__init__` complete through the attribute projections and cross-attention module; `forward` / `calculate_loss` / `full_sort_predict` bodies pending, plus config-key wiring into `scripts/config.yaml` and registry wiring into `scripts/train.py`) |
 
 ## Known Issues
 

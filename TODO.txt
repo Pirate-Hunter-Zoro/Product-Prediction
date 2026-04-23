@@ -730,22 +730,148 @@ NOVEL METHOD:
       the first time the model __init__ calls these three times (title,
       brand, color) and once (price). Follows the project rule that
       smoke tests wait until there is output and a runnable caller.
-[ ] *** NEXT *** Implement novel method as a RecBole SequentialRecommender
-    subclass. Loader helpers already exist at scripts/attribute_loader.py
-    (load_text_embedding for title/brand/color, load_price_bins for
-    price); the subclass __init__ calls load_text_embedding three
-    times and load_price_bins once, registers the three frozen text
-    tensors as buffers, and allocates nn.Embedding(n_bins + 1, d) for
-    the learnable price table indexed by the bin-idx tensor.
-    Expected structure:
-    - Sequence encoder (GRU or transformer) over the item_id_list
-      produces a session-state query vector.
-    - Per-item attribute bag is encoded into 4 key/value tokens
-      via the above column-specific encoders.
-    - Cross-attention layer: query = session state, keys/values =
-      attribute bag for each candidate item.
-    - Output logits = dot(session_state + attended_attributes,
-      item_embedding).
+[x] scripts/novel_model.py skeleton + __init__ complete (2026-04-23):
+    - New file defining class NovelModel(SequentialRecommender). No
+      CLI, no main; imported by RecBole's trainer via the model-name
+      lookup (registry wiring to train.py still pending -- see
+      REMAINING WORK).
+    - Imports: torch, torch.nn as nn, SequentialRecommender from
+      recbole.model.abstract_recommender, and load_text_embedding +
+      load_price_bins from attribute_loader. The bare
+      `attribute_loader` import relies on scripts/ being on sys.path
+      when train.py launches; re-verify once the training wire-up
+      lands.
+    - __init__(config, dataset) body is fully allocated. Order of
+      operations (order matters -- the loader call on price_bin_idx
+      depends on self.n_price_bins already being set):
+      1. super().__init__(config, dataset). RecBole base-class
+         bookkeeping: sets self.n_items, self.device, self.logger,
+         self.ITEM_ID_FIELD, etc.
+      2. Scalar reads: self.n_price_bins, self.hidden_size,
+         self.num_layers, self.dropout_prob, self.num_heads from
+         config. Also self.text_dim = self.title_embeddings.shape[1]
+         (read from the buffer AFTER it's registered -- not
+         hardcoded to 384, so a future encoder swap propagates
+         without editing this file).
+      3. Frozen buffers via register_buffer (NOT raw attribute
+         assignment -- raw assignment skips .to(device) transfer
+         AND state_dict serialization):
+           title_embeddings  = load_text_embedding(TITLE_EMBEDDING_PATH, dataset)
+           brand_embeddings  = load_text_embedding(BRAND_EMBEDDING_PATH, dataset)
+           color_embeddings  = load_text_embedding(COLOR_EMBEDDING_PATH, dataset)
+           price_bin_idx     = load_price_bins(PRICE_BINS_PATH, dataset,
+                                               n_bins=self.n_price_bins)
+         All four tensors are [num_items, ...]-shaped with row 0 as
+         PAD (zeros for text, n_price_bins sentinel for price).
+      4. Learnable modules (parameters, NOT buffers):
+           self.price_embedding = nn.Embedding(self.n_price_bins + 1,
+                                               self.hidden_size)
+           self.item_embedding  = nn.Embedding(self.n_items,
+                                               self.hidden_size,
+                                               padding_idx=0)
+           self.emb_dropout     = nn.Dropout(self.dropout_prob)
+           self.gru             = nn.GRU(input_size=self.hidden_size,
+                                         hidden_size=self.hidden_size,
+                                         num_layers=self.num_layers,
+                                         batch_first=True)
+           self.title_proj      = nn.Linear(self.text_dim, self.hidden_size)
+           self.brand_proj      = nn.Linear(self.text_dim, self.hidden_size)
+           self.color_proj      = nn.Linear(self.text_dim, self.hidden_size)
+           self.cross_attn      = nn.MultiheadAttention(embed_dim=self.hidden_size,
+                                                        num_heads=self.num_heads,
+                                                        dropout=self.dropout_prob,
+                                                        batch_first=True)
+    - Decisions locked during construction:
+      * item_embedding uses padding_idx=0 so the PAD row's gradients
+        are pinned; without it, the PAD vector drifts and poisons
+        padded positions at eval time.
+      * GRU does NOT pass dropout=self.dropout_prob. PyTorch's
+        nn.GRU dropout kwarg only applies BETWEEN stacked layers
+        (zero effect at num_layers=1). emb_dropout handles the
+        embedding->GRU edge; between-layer dropout is its own
+        decision if num_layers ever grows beyond 1.
+      * Three separate text projections (title_proj, brand_proj,
+        color_proj) rather than one shared nn.Linear. Each attribute
+        learns its own subspace in the shared hidden_size space;
+        parameter cost is negligible (3 * 384 * hidden_size) vs the
+        item embedding table.
+      * No projection for price. self.price_embedding outputs
+        hidden_size vectors directly; reuse in the attribute bag.
+      * MultiheadAttention uses batch_first=True to match the GRU's
+        [batch, seq, dim] layout. Without it, silent shape errors
+        fire in forward.
+      * hidden_size must be divisible by num_heads -- PyTorch's
+        nn.MultiheadAttention asserts this at allocation time.
+    - forward(item_seq, item_seq_len), calculate_loss(interaction),
+      and full_sort_predict(interaction) are all stubs that still
+      raise NotImplementedError. Signatures typed: forward returns
+      FloatTensor[batch, hidden_size]; calculate_loss returns
+      FloatTensor (scalar loss); full_sort_predict returns
+      FloatTensor[batch, num_items].
+    - Config keys __init__ consumes that are NOT yet in
+      scripts/config.yaml (instantiation will KeyError until wired):
+        TITLE_EMBEDDING_PATH, BRAND_EMBEDDING_PATH,
+        COLOR_EMBEDDING_PATH, PRICE_BINS_PATH, n_price_bins,
+        hidden_size (already present for other sequential models),
+        num_layers, dropout_prob, num_heads.
+    - Bug gotchas found during construction, recorded for future
+      editors:
+      * torch.load on the pickle files directly gives you a DICT
+        ({"item_ids": list[str], "embeddings": FloatTensor[N, 384]}),
+        not a tensor aligned to RecBole's internal item IDs. Use
+        load_text_embedding / load_price_bins -- their whole purpose
+        is the dataset.token2id reindex pass that aligns embedding
+        row `i` to internal item ID `i`. Skipping the helpers was
+        the first bug caught during this step; every later attribute
+        lookup would silently return the wrong item's embedding.
+      * self.xxx = <tensor> is NOT register_buffer. Raw attribute
+        assignment does not move with .to(device) and does not
+        serialize with state_dict. Second bug caught: three buffers
+        were correctly registered, the fourth was assigned raw;
+        would have crashed with a CPU/GPU device-mismatch at the
+        first forward call on GPU.
+      * A half-typed line in forward (`self.num_layers = self.`)
+        silently made the whole file a SyntaxError. Re-read the full
+        file after every edit; partial-edit artifacts are easy to
+        leave behind.
+[ ] *** NEXT *** Implement forward(item_seq, item_seq_len) body.
+    Signature already typed; stub currently raises NotImplementedError(0).
+    Planned body (GRU4Rec-clone at this stage -- attributes not yet
+    invoked):
+      1. item_seq_emb = self.item_embedding(item_seq)
+         -> [batch, max_seq_len, hidden_size]
+      2. item_seq_emb_dropout = self.emb_dropout(item_seq_emb)
+      3. gru_output, _ = self.gru(item_seq_emb_dropout)
+         -- keep per-timestep output, discard h_n (h_n only gives the
+         last position of the max_seq_len axis, which is almost
+         always padded).
+      4. session_state = self.gather_indexes(gru_output,
+                                             item_seq_len - 1)
+         -- gather_indexes is inherited from SequentialRecommender;
+         the `- 1` converts length-count to zero-based index of the
+         final real timestep.
+      5. return session_state
+    After this, the class is structurally a GRU4Rec up through
+    forward. Attribute bag assembly + cross-attention + scoring are
+    the next two steps (items below, not yet broken out).
+[ ] Extend forward to assemble the per-item attribute bag
+    ([num_items, 4, hidden_size] from projected title/brand/color +
+    price_embedding lookup). Cache on first call; it's static across
+    batches.
+[ ] Extend forward with the cross-attention pass and produce
+    full-vocab logits. Query = session state, keys/values =
+    attribute bag. Output logits = dot(session_state +
+    attended_attributes, item_embedding).
+[ ] Implement calculate_loss (CE loss on logits vs target) and
+    full_sort_predict (returns full-vocab logits unchanged). Both
+    are short once forward is done.
+[ ] Wire NovelModel into RecBole's training pipeline: register it in
+    train.py (RecBole looks up models by class name in its registry;
+    custom classes need either a model_path override or an explicit
+    registry addition), add the missing config keys (attribute
+    paths, n_price_bins, num_layers, dropout_prob, num_heads) to
+    scripts/config.yaml, and smoke test with --nrows 3000 before
+    committing a full-scale sbatch.
 [ ] Train novel method on full dataset, record metrics.
 [ ] Ablation experiments -- required regardless of result. The
     paper's Table 5 is the template: add attribute types one at a
@@ -843,6 +969,34 @@ scripts/attribute_loader.py      - Model-side helpers that reindex the
                                    Python loop) and inherit the
                                    torch.load weights_only=False
                                    monkey-patch at module top.
+scripts/novel_model.py           - NovelModel(SequentialRecommender)
+                                   subclass -- novel cross-attention
+                                   method. __init__ fully allocated:
+                                   four register_buffer calls
+                                   (title/brand/color text
+                                   embeddings + price_bin_idx),
+                                   learnable item_embedding
+                                   (padding_idx=0), emb_dropout,
+                                   GRU (batch_first=True), three
+                                   separate text projections
+                                   (title_proj, brand_proj,
+                                   color_proj: nn.Linear 384 ->
+                                   hidden), price_embedding
+                                   (nn.Embedding(n_bins+1, hidden)),
+                                   and cross_attn
+                                   (nn.MultiheadAttention,
+                                   batch_first=True).
+                                   forward/calculate_loss/full_sort_predict
+                                   bodies are still stubs raising
+                                   NotImplementedError; signatures
+                                   are typed. Config keys consumed
+                                   but not yet in config.yaml:
+                                   TITLE_EMBEDDING_PATH,
+                                   BRAND_EMBEDDING_PATH,
+                                   COLOR_EMBEDDING_PATH,
+                                   PRICE_BINS_PATH, n_price_bins,
+                                   num_layers, dropout_prob,
+                                   num_heads.
 create_env.sh                    - Environment setup
 run_preprocessing.sbatch         - Slurm job script for preprocessing
 run_training.sbatch              - Parameterized Slurm job script for training
