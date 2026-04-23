@@ -607,28 +607,81 @@ NOVEL METHOD:
     data/amazon_m2/color_embeddings.pt, aligned {item_ids,
     embeddings} dicts. Verify post-run -- see completed-work
     submission entry above for the sanity checklist.
-[ ] *** NEXT *** Bucketize PRICE into a learnable embedding table.
-    Design locked (2026-04-22):
-    - 32 quantile bins, boundaries computed from TRAIN-set prices
-      only (no test leakage). Save boundaries alongside bin indices
-      so the same cut points reproduce at train and eval time.
-    - nn.Embedding(32, 384) inside the SequentialRecommender
-      subclass; initialized randomly, updated by the recommendation
-      loss. Lives in the same 384-dim space as the MiniLM attribute
-      vectors so the cross-attention layer treats all four
-      attribute slots uniformly.
-    - No HuggingFace embedder for price -- no universal numerical
-      embedder exists because floats lack cross-domain distributional
-      semantics the way text does. Decision recorded to avoid
-      re-litigating next session.
-    Suggested preprocessing output (to match the encode_* pattern):
-    - data/amazon_m2/price_bins.pt: {"item_ids": list[str],
-      "bin_idx": LongTensor[N]} aligned with the other embedding
-      files.
-    - data/amazon_m2/price_boundaries.pt: FloatTensor shape (31,),
-      the 31 quantile cut points that define the 32 bins. Load at
-      inference time to re-bucket any held-out prices consistently.
-[ ] Implement novel method as a RecBole SequentialRecommender
+[x] scripts/bucketize_price.py (2026-04-23):
+    - Five pure functions + a bare __main__ orchestrator. No main()
+      wrapper (matches build_item_attributes.py convention; single-
+      shot script, no need for the indirection).
+    - load_train_vocab(inter_dir): reads amazon_m2.train.inter as
+      TSV, unions item_id:token targets with item_id_list:token_seq
+      history (split -> explode), drops NaN and empty strings via
+      `s[s.notna() & (s != "")]` (parenthesize -- & binds tighter
+      than != in Python, same landmine as every other pandas
+      filter), returns set[str].
+    - load_train_prices(attributes_path, train_vocab): reads
+      item_attributes.parquet, filters .isin(train_vocab) on
+      item_id, returns 1-D float64 ndarray of prices. Train-only
+      to prevent test leakage into the quantile cuts.
+    - compute_quantile_boundaries(train_prices, n_bins): guards
+      n_bins < 2 with ValueError, builds np.linspace(1/n_bins,
+      (n_bins-1)/n_bins, n_bins-1) as the quantile level vector,
+      returns np.quantile result (float64, shape (n_bins-1,)). No
+      method= override -- default "linear" is the convention. No
+      boundary dedup -- if adjacent cuts collide, digitize handles
+      it correctly by producing an empty bin between them.
+    - bucketize_all_prices(attributes_path, boundaries, n_bins):
+      reloads the parquet (no vocab filter -- every catalog item
+      gets a bin_idx, including valid/test-only items), preserves
+      parquet row order, np.digitize with default right=False,
+      .astype(np.int64) so torch.from_numpy produces a LongTensor
+      without an implicit upcast. Returns (list[str], ndarray[int64])
+      aligned by position, same convention as the encode_* pickles.
+    - save_outputs(...): torch.from_numpy on int64 is zero-copy to
+      LongTensor; boundaries cast to float32 in numpy BEFORE
+      torch.from_numpy (single allocation, not a .to(float32) after).
+      Writes {"item_ids": list[str], "bin_idx": LongTensor[N]} to
+      price_bins.pt and a bare FloatTensor[31] to price_boundaries.pt
+      (no dict wrapper on boundaries -- TODO line-629 spec).
+    - CLI: --inter-dir, --attributes, --output-bins,
+      --output-boundaries, --n-bins. All optional; defaults align
+      with the rest of the pipeline. No --nrows -- full-scale
+      runs in seconds on CPU, smoke flag adds plumbing without
+      value.
+    - Full-scale run (2026-04-23, local terminal, no sbatch):
+        Vocab size:            1,356,886
+        Train prices shape:    (1356886,), dtype float64
+        Boundaries shape:      (31,); min 3.78, median 24.49, max 40000000.07
+        Bin indices shape:     (1393956,); min 0, max 31
+        Bin occupancy:         min 17,977, max 69,593
+      Wrote data/amazon_m2/price_bins.pt and
+      data/amazon_m2/price_boundaries.pt.
+    - Bin balance: observed 2.7x spread (17,977 to 69,593) against
+      expected 43,561 per bin. NOT a bug. Retail prices are not a
+      smooth continuum -- they pile up on psychological price
+      points ($9.99, $14.99, $19.99, etc.). When a quantile cut
+      lands on or near one of those point masses, the mass does
+      not split; all tied items land in one bin, which forces
+      adjacent bins to shrink. Min bin count > 0 confirms all
+      31 cut points are distinct (no collapsed bins). A dedicated
+      "break ties with noise" pre-step would smooth this out but
+      would destroy the interpretability of the bin embedding by
+      putting same-price items into different bins. Rejected.
+    - DATA QUALITY FINDING: the 31/32 quantile boundary is
+      $40,000,000.07. At 1.35M train items this means ~42,000 items
+      are priced above $40M in products_train.csv. Amazon does not
+      sell forty-million-dollar products -- almost certainly
+      placeholder / sentinel / junk values in the raw catalog.
+      Mitigation: NONE required for the novel model. Because we
+      bucketize, every absurdly-high price collapses into the top
+      bin (bin_idx=31), whose 384-dim embedding is learned end-to-
+      end by the recommendation loss. Gradients do not see the
+      raw dollar figure and cannot be destabilized by an outlier
+      magnitude; the top bin simply learns a "weird-price" latent
+      signal alongside the other 31 bins. Bucketize-then-embed is
+      specifically robust to this class of data contamination,
+      whereas a direct numeric embedding (e.g. log1p + linear
+      projection) would have been pulled by the $40M tail. Cite
+      this in the report when discussing the price encoder choice.
+[ ] *** NEXT *** Implement novel method as a RecBole SequentialRecommender
     subclass. Expected structure:
     - Sequence encoder (GRU or transformer) over the item_id_list
       produces a session-state query vector.
@@ -699,6 +752,20 @@ scripts/encode_text_attribute.py - Encodes any text column from
                                    {item_ids, embeddings} pickle to
                                    data/amazon_m2/{column}_embeddings.pt
                                    (1.39M rows, 384-dim, L2-norm).
+scripts/bucketize_price.py       - Bucketizes per-item price into 32
+                                   quantile bins. Boundaries computed
+                                   from TRAIN prices only (no test
+                                   leakage); all catalog items
+                                   receive a bin_idx preserving
+                                   parquet row order. CLI:
+                                   --inter-dir, --attributes,
+                                   --output-bins,
+                                   --output-boundaries, --n-bins.
+                                   No --nrows -- full-scale runs in
+                                   seconds on CPU. Writes
+                                   price_bins.pt ({item_ids,
+                                   bin_idx}) and price_boundaries.pt
+                                   (bare FloatTensor[31]).
 create_env.sh                    - Environment setup
 run_preprocessing.sbatch         - Slurm job script for preprocessing
 run_training.sbatch              - Parameterized Slurm job script for training
@@ -750,6 +817,29 @@ data/amazon_m2/color_embeddings.pt          - Per-item color embeddings
                                               "no color specified"
                                               signal rather than a
                                               missing-data case.
+data/amazon_m2/price_bins.pt                - Per-item price bin
+                                              indices; {"item_ids":
+                                              list[str], "bin_idx":
+                                              LongTensor[1393956]}
+                                              aligned with the other
+                                              embedding pickles by
+                                              parquet row order.
+                                              Values in [0, 31]; 32
+                                              quantile bins from
+                                              train-only boundaries.
+                                              Generated by
+                                              bucketize_price.py.
+data/amazon_m2/price_boundaries.pt          - 31 quantile cut points
+                                              (bare FloatTensor[31],
+                                              no dict wrapper).
+                                              Computed from TRAIN
+                                              prices only; load at
+                                              eval time to re-bucket
+                                              held-out prices with
+                                              the same cuts. Top cut
+                                              is ~$40M due to
+                                              catalog outliers --
+                                              see KNOWN ISSUES.
 Amazon-M2-Session-Recommendation/  - Reference implementation (gitignored)
 Amazon-M2.pdf                    - Dataset paper (NeurIPS 2023 D&B)
 Final project instruction.pdf    - Course project spec
@@ -824,3 +914,14 @@ KNOWN ISSUES / GOTCHAS
   because any non-empty string is truthy in Python, so `--flag False`
   turns the flag ON. Always use `action='store_true'` (or
   `action='store_false'`) for boolean CLI flags. No type=, no default=.
+- products_train.csv contains extreme long-tail price outliers.
+  The 31/32 quantile over train prices is $40,000,000.07, implying
+  ~42,000 items priced above $40M. Clearly placeholder / sentinel /
+  junk values, not real Amazon listings. NOT fixed upstream. Safe
+  for the novel model because every absurd price collapses into
+  bin_idx=31 under 32-quantile bucketing, and that bin's learnable
+  384-dim embedding is updated by the recommendation loss --
+  gradients never see raw dollar figures. A direct numeric
+  encoder (e.g. log1p + linear) would have been pulled by the
+  $40M tail; bucketize-then-embed is specifically robust here.
+  Mention in the report when discussing the price encoder choice.

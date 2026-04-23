@@ -36,6 +36,7 @@ scripts/
   pop_baseline.py          Hand-rolled Popularity baseline (global + session-aware)
   build_item_attributes.py Builds per-item attribute parquet (item_id, title, brand, price, color) from products_train.csv filtered to the RecBole vocab
   encode_text_attribute.py Encodes any text column from item_attributes.parquet with paraphrase-multilingual-MiniLM-L12-v2 (selected by --column {title,brand,color}); writes aligned {item_ids, embeddings} tensor pickle to data/amazon_m2/{column}_embeddings.pt
+  bucketize_price.py       Bucketizes per-item price into 32 quantile bins (boundaries from TRAIN prices only); writes data/amazon_m2/price_bins.pt ({item_ids, bin_idx}) and data/amazon_m2/price_boundaries.pt (bare FloatTensor[31])
 create_env.sh              Conda environment setup (cluster)
 run_preprocessing.sbatch   Slurm job for preprocessing (CPU only)
 run_training.sbatch        Slurm job for training (takes model name as $1)
@@ -57,6 +58,8 @@ data/
                              title_embeddings.pt                (encode_text_attribute.py --column title)
                              brand_embeddings.pt                (encode_text_attribute.py --column brand)
                              color_embeddings.pt                (encode_text_attribute.py --column color)
+                             price_bins.pt                      (bucketize_price.py)
+                             price_boundaries.pt                (bucketize_price.py)
 saved/                     Model checkpoints
 slurm_logs/                Slurm stdout/stderr logs
 ```
@@ -186,7 +189,7 @@ This runs `scripts/pop_baseline.py` on CPU, completes in roughly one minute, and
 | GRU4Rec | Baseline | Trained, evaluated |
 | NARM    | Baseline | Trained, evaluated |
 | Pop     | Baseline | Evaluated (hand-rolled, see `scripts/pop_baseline.py`) |
-| Cross-attention over item attributes | Novel    | In development (item-attribute parquet built; title/brand/color embeddings cached via `scripts/encode_text_attribute.py`; price bucketization + `SequentialRecommender` subclass next) |
+| Cross-attention over item attributes | Novel    | In development (item-attribute parquet built; title/brand/color embeddings cached via `scripts/encode_text_attribute.py`; price bucketized into 32 quantile bins via `scripts/bucketize_price.py`; `SequentialRecommender` subclass next) |
 
 ## Known Issues
 
