@@ -37,6 +37,7 @@ scripts/
   build_item_attributes.py Builds per-item attribute parquet (item_id, title, brand, price, color) from products_train.csv filtered to the RecBole vocab
   encode_text_attribute.py Encodes any text column from item_attributes.parquet with paraphrase-multilingual-MiniLM-L12-v2 (selected by --column {title,brand,color}); writes aligned {item_ids, embeddings} tensor pickle to data/amazon_m2/{column}_embeddings.pt
   bucketize_price.py       Bucketizes per-item price into 32 quantile bins (boundaries from TRAIN prices only); writes data/amazon_m2/price_bins.pt ({item_ids, bin_idx}) and data/amazon_m2/price_boundaries.pt (bare FloatTensor[31])
+  attribute_loader.py      Model-side helpers that load the precomputed attribute artifacts into tensors indexed by RecBole internal item ID. load_text_embedding reads a {title,brand,color}_embeddings.pt pickle and returns FloatTensor[num_items, 384] with row 0 (PAD) zeroed. load_price_bins reads price_bins.pt and returns LongTensor[num_items] with row 0 = n_bins (reserved PAD sentinel) and rows 1..num_items-1 = bin index in [0, n_bins-1]. Both use vectorized dataset.token2id; neither is a CLI entry point.
 create_env.sh              Conda environment setup (cluster)
 run_preprocessing.sbatch   Slurm job for preprocessing (CPU only)
 run_training.sbatch        Slurm job for training (takes model name as $1)
@@ -189,7 +190,7 @@ This runs `scripts/pop_baseline.py` on CPU, completes in roughly one minute, and
 | GRU4Rec | Baseline | Trained, evaluated |
 | NARM    | Baseline | Trained, evaluated |
 | Pop     | Baseline | Evaluated (hand-rolled, see `scripts/pop_baseline.py`) |
-| Cross-attention over item attributes | Novel    | In development (item-attribute parquet built; title/brand/color embeddings cached via `scripts/encode_text_attribute.py`; price bucketized into 32 quantile bins via `scripts/bucketize_price.py`; `SequentialRecommender` subclass next) |
+| Cross-attention over item attributes | Novel    | In development (item-attribute parquet built; title/brand/color embeddings cached via `scripts/encode_text_attribute.py`; price bucketized into 32 quantile bins via `scripts/bucketize_price.py`; model-side loader helpers in `scripts/attribute_loader.py`; `SequentialRecommender` subclass next) |
 
 ## Known Issues
 

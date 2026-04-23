@@ -681,8 +681,63 @@ NOVEL METHOD:
       whereas a direct numeric embedding (e.g. log1p + linear
       projection) would have been pulled by the $40M tail. Cite
       this in the report when discussing the price encoder choice.
+[x] scripts/attribute_loader.py (2026-04-23):
+    - Two pure functions, no CLI, no main. This file is imported by
+      the model; it is not an entry point.
+    - Module top: monkey-patches torch.load with weights_only=False
+      via kwargs.setdefault so a caller can still override. Same
+      category of patch as train.py and evaluate.py, needed here
+      because the attribute pickles contain Python list[str] which
+      PyTorch 2.6's safe-load allowlist rejects.
+    - load_text_embedding(pickle_path, dataset, item_id_field="item_id")
+      -> FloatTensor[num_items, embedding_dim]. Reads a
+      {title,brand,color}_embeddings.pt pickle (dict with keys
+      "item_ids": list[str] and "embeddings": FloatTensor[N, 384]),
+      allocates a zero output tensor sized by dataset.num(item_id_field)
+      so row 0 is the PAD slot, batched-translates every external
+      token to its RecBole internal ID via dataset.token2id (single
+      vectorized call, NOT a Python loop over 1.39M items), and does
+      one index-assignment output[internal_ids] = embeddings. Row 0
+      stays zero. Embedding dim is read from embeddings.shape[1] --
+      not hardcoded to 384 -- so a future encoder swap does not
+      require editing the loader.
+    - load_price_bins(pickle_path, dataset, item_id_field="item_id",
+      n_bins=32) -> LongTensor[num_items]. Reads price_bins.pt (dict
+      with "item_ids": list[str] and "bin_idx": LongTensor[N]),
+      asserts bin_idx.dtype == torch.long (loud localized failure if
+      bucketize_price.py's dtype is ever "fixed" to int32; nn.Embedding
+      would otherwise crash far downstream with a confusing error),
+      allocates torch.full((num_items,), n_bins, dtype=torch.long) so
+      every row starts at the reserved sentinel, batched-translates
+      tokens via token2id, and scatters bin indices into their internal
+      ID rows. Row 0 (PAD) stays at n_bins; any hypothetical vocab/pickle
+      desync also degrades to n_bins rather than silently landing items
+      in bin 0. Caller's nn.Embedding must therefore be sized n_bins + 1
+      to host the reserved PAD embedding.
+    - Alignment invariant relied on by BOTH functions: the pickle's
+      item_ids list is in the same row order as the embeddings /
+      bin_idx tensor it ships with, because encode_text_attribute.py
+      and bucketize_price.py both preserve parquet row order. If this
+      invariant ever breaks on the writer side, the index-assignment
+      on the reader side will silently produce mis-aligned embeddings
+      with no crash -- the invariant is load-bearing.
+    - Catalog gap = 0 for this pipeline (see build_item_attributes.py
+      completed entry), so the sentinel path in load_price_bins is
+      insurance, not an expected code path. token2id on an item not
+      in the RecBole vocab WILL raise -- leave the loud crash in,
+      do not wrap in try/except.
+    - No smoke test yet. File has no entry point; it will be exercised
+      the first time the model __init__ calls these three times (title,
+      brand, color) and once (price). Follows the project rule that
+      smoke tests wait until there is output and a runnable caller.
 [ ] *** NEXT *** Implement novel method as a RecBole SequentialRecommender
-    subclass. Expected structure:
+    subclass. Loader helpers already exist at scripts/attribute_loader.py
+    (load_text_embedding for title/brand/color, load_price_bins for
+    price); the subclass __init__ calls load_text_embedding three
+    times and load_price_bins once, registers the three frozen text
+    tensors as buffers, and allocates nn.Embedding(n_bins + 1, d) for
+    the learnable price table indexed by the bin-idx tensor.
+    Expected structure:
     - Sequence encoder (GRU or transformer) over the item_id_list
       produces a session-state query vector.
     - Per-item attribute bag is encoded into 4 key/value tokens
@@ -766,6 +821,28 @@ scripts/bucketize_price.py       - Bucketizes per-item price into 32
                                    price_bins.pt ({item_ids,
                                    bin_idx}) and price_boundaries.pt
                                    (bare FloatTensor[31]).
+scripts/attribute_loader.py      - Model-side helpers that reindex the
+                                   precomputed attribute artifacts
+                                   from external tokens to RecBole
+                                   internal IDs. Two functions, no
+                                   CLI. load_text_embedding reads a
+                                   {title,brand,color}_embeddings.pt
+                                   pickle and returns
+                                   FloatTensor[num_items, 384] with
+                                   row 0 (PAD) zeroed.
+                                   load_price_bins reads price_bins.pt
+                                   and returns LongTensor[num_items]
+                                   with row 0 = n_bins (reserved PAD
+                                   sentinel) and rows 1..num_items-1
+                                   holding the per-item bin index in
+                                   [0, n_bins-1]. Caller's price
+                                   nn.Embedding must therefore be
+                                   sized n_bins + 1. Both functions
+                                   use a single vectorized
+                                   dataset.token2id call (not a
+                                   Python loop) and inherit the
+                                   torch.load weights_only=False
+                                   monkey-patch at module top.
 create_env.sh                    - Environment setup
 run_preprocessing.sbatch         - Slurm job script for preprocessing
 run_training.sbatch              - Parameterized Slurm job script for training
