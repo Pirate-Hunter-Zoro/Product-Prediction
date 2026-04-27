@@ -10,7 +10,6 @@ Novelty matters more than outperformance.
 
 Dataset: ~3.6M training sessions, ~1.4M products, 6 locales (UK, DE, JP large;
 ES, FR, IT small). Sessions average ~4 items. Target metrics: MRR@100, Recall@100.
-Reference project (Amazon-M2-Session-Recommendation/) exists locally but gitignored.
 
 Framework: RecBole (PyTorch-based recommendation library). Baselines use
 built-in RecBole models; novel method will subclass SequentialRecommender.
@@ -1333,7 +1332,6 @@ data/amazon_m2/price_boundaries.pt          - 31 quantile cut points
                                               is ~$40M due to
                                               catalog outliers --
                                               see KNOWN ISSUES.
-Amazon-M2-Session-Recommendation/  - Reference implementation (gitignored)
 Amazon-M2.pdf                    - Dataset paper (NeurIPS 2023 D&B)
 Final project instruction.pdf    - Course project spec
 
