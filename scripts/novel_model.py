@@ -123,4 +123,8 @@ class NovelModel(SequentialRecommender):
         Returns:
             torch.FloatTensor: Shape (batch, num_items) - scores across full vocab
         """
-        raise NotImplementedError()
+        item_sequence = interaction[self.ITEM_SEQ] # Shape (batch, max_seq_len)
+        item_seq_len = interaction[self.ITEM_SEQ_LEN] # Shape (batch,)
+        fused_output = self.forward(item_sequence, item_seq_len) # Shape (batch, hidden_size)
+        # Once again, recall that item_embedding.weight is Shape (num_items, hidden_size), so we take its transpose
+        return torch.matmul(fused_output, self.item_embedding.weight.T) # Shape (batch, num_items)

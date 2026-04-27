@@ -903,20 +903,29 @@ NOVEL METHOD:
         against the full vocabulary table item_embedding.weight.
       - Did NOT manually zero row 0 (PAD). target is always in
         [1, num_items-1], so cross-entropy is unaffected.
-[ ] *** NEXT *** Implement full_sort_predict(interaction). Same
-    fused-extraction as calculate_loss (item_sequence, item_seq_len
-    pulled from interaction; fused_output = self.forward(...)), then
-    return logits = fused_output @ self.item_embedding.weight.T
-    UNCHANGED -- RecBole's eval pipeline expects raw scores, not
-    softmaxed. Do NOT pull POS_ITEM_ID here; the eval pipeline scores
-    the full vocab and computes ranking metrics itself.
-    Pitfall: do NOT score against item_embedding(item_sequence);
-    score against the full vocabulary table self.item_embedding.weight.
-    Pitfall: row 0 of item_embedding is the PAD row (all zeros from
-    padding_idx=0). The dot product will yield score 0 at index 0.
-    RecBole filters PAD from the eval ranking, so this is fine; do
-    not zero it out yourself.
-[ ] Wire NovelModel into RecBole's training pipeline: register it in
+[x] full_sort_predict(interaction) body implemented (2026-04-27).
+    Body:
+      1. item_sequence = interaction[self.ITEM_SEQ]
+         -> (batch, max_seq_len). Same local-name disambiguation as
+         calculate_loss.
+      2. item_seq_len = interaction[self.ITEM_SEQ_LEN] -> (batch,).
+      3. fused_output = self.forward(item_sequence, item_seq_len)
+         -> (batch, hidden_size).
+      4. return torch.matmul(fused_output,
+                             self.item_embedding.weight.T)
+         -> (batch, num_items). Raw scores; RecBole's eval pipeline
+         performs ranking itself and does not expect a softmax.
+    Pitfalls confirmed (and avoided):
+      - Did NOT pull POS_ITEM_ID; eval scores the full vocab.
+      - Did NOT score against item_embedding(item_sequence); scored
+        against the full vocabulary table item_embedding.weight.
+      - Did NOT manually zero row 0 (PAD). RecBole filters PAD from
+        the ranking; the dot product naturally yields 0 there from
+        padding_idx=0.
+    NovelModel now has all three RecBole-required method bodies
+    (forward, calculate_loss, full_sort_predict) implemented. No
+    NotImplementedError stubs remain.
+[ ] *** NEXT *** Wire NovelModel into RecBole's training pipeline: register it in
     train.py (RecBole looks up models by class name in its registry;
     custom classes need either a model_path override or an explicit
     registry addition), add the missing config keys (attribute
