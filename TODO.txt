@@ -925,13 +925,122 @@ NOVEL METHOD:
     NovelModel now has all three RecBole-required method bodies
     (forward, calculate_loss, full_sort_predict) implemented. No
     NotImplementedError stubs remain.
-[ ] *** NEXT *** Wire NovelModel into RecBole's training pipeline: register it in
-    train.py (RecBole looks up models by class name in its registry;
-    custom classes need either a model_path override or an explicit
-    registry addition), add the missing config keys (attribute
-    paths, n_price_bins, num_layers, dropout_prob, num_heads) to
-    scripts/config.yaml, and smoke test with --nrows 3000 before
-    committing a full-scale sbatch.
+[x] Wired NovelModel into RecBole's training pipeline (2026-04-27).
+    Three sub-tasks completed; smoke test verification still pending.
+
+    1. train.py registration via monkey-patch:
+       - Initial setattr(sequential_recommender, 'NovelModel', NovelModel)
+         approach DID NOT work. RecBole's get_model
+         (recbole/utils/utils.py:64) walks model_submodule with
+         importlib.util.find_spec on a hypothetical filename
+         (recbole/model/sequential_recommender/novelmodel.py), not
+         getattr on the loaded package object. The setattr graft is
+         never consulted.
+       - First fallback: pass model=NovelModel (class object, not
+         string) to run_recbole. Configurator at line 211 supports
+         non-string model and skips its own get_model call. This
+         bypassed Config.__init__ but quick_start.py:137, 216, 262
+         each call get_model(config["model"]) on the string
+         "NovelModel" (set at configurator.py:213 via
+         final_model = model.__name__) - three more crash points.
+       - Final fix: monkey-patch
+         recbole.quick_start.quick_start.get_model with a wrapper
+         that returns NovelModel for the literal string "NovelModel"
+         and delegates to the original for everything else. Same
+         architectural pattern as the existing torch.load patch.
+         Single install, intercepts all three call sites in
+         quick_start.py. Behavior unchanged for GRU4Rec/NARM/Pop
+         (string lookups still go through the original get_model
+         and find their on-disk files). lightgbm install NOT
+         required - the get_model submodule walk that triggered the
+         lightgbm import is never reached for NovelModel.
+       - The ternary in main()
+         (model_arg = NovelModel if args.model == "NovelModel"
+         else args.model) is defense-in-depth, not strictly needed
+         after the patch.
+
+    2. Config keys wired into scripts/config.yaml:
+       - TITLE_EMBEDDING_PATH, BRAND_EMBEDDING_PATH,
+         COLOR_EMBEDDING_PATH, PRICE_BINS_PATH (relative-to-CWD paths
+         to the .pt artifacts under data/amazon_m2/).
+       - n_price_bins: 32 (must match bucketize_price.py output).
+       - num_layers: 1, dropout_prob: 0.3 (matches RecBole GRU4Rec
+         defaults at recbole/properties/model/GRU4Rec.yaml for
+         apples-to-apples baseline parity).
+       - num_heads: 4 (divides hidden_size=128 cleanly to 32-dim
+         attention heads).
+       - loss_type: CE (matches calculate_loss's F.cross_entropy;
+         required because SequentialRecommender does not declare an
+         input_type class attribute - only ContextRecommender does
+         at recbole/model/abstract_recommender.py:222 - so
+         configurator.py:340 falls through to the loss_type-based
+         input-type inference at line 343).
+       - hidden_size: 128 (matches GRU4Rec/NARM defaults; needed
+         because RecBole has no per-model defaults file for our
+         custom NovelModel, so config["hidden_size"] returns None
+         silently when omitted, producing a TypeError downstream
+         on nn.Embedding(..., None) at novel_model.py:26).
+
+    3. attribute_loader.py vocab-tolerance patch (Option C from
+       smoke-test triage):
+       - load_text_embedding and load_price_bins now build a
+         known_tokens set from
+         dataset.field2token_id[item_id_field], compute a present
+         mask over ext_ids, and drop missing items from BOTH ext_ids
+         and the corresponding tensor (embeddings or bins) using the
+         same mask. Index-alignment invariant preserved.
+       - Boolean-mask indexing on the tensors uses
+         torch.as_tensor(present, dtype=torch.bool); list filtering
+         on ext_ids uses a Python list comp. Different mechanics
+         because ext_ids is list[str] and the tensors are torch
+         tensors.
+       - Flushing print fires only when n_missing > 0 in
+         load_text_embedding (load_price_bins prints
+         unconditionally; both are acceptable). Format:
+         "Missing N out of M items in the input dataset...".
+       - Confirmed working on the 3000-row smoke split (2026-04-27):
+         alarm fired four times with N=1380794 / M=1393956 (~99%
+         drop, expected for the smoke-vocab subset). On full-data
+         runs the alarm should never fire - count > 0 in production
+         indicates a vocab/embedding mismatch bug.
+
+    Failure trail before final fix (in order, all on 2026-04-27 with
+    the 3000-row smoke split already in data/amazon_m2/):
+       a. ModuleNotFoundError: lightgbm (from get_model walking
+          exlib_recommender). Setattr-only registration did not
+          register; lookup loop kept walking and triggered
+          exlib_recommender's eager lightgbm import via __init__.py.
+       b. ValueError: NovelModel is not the name of an existing
+          model. After hypothetically resolving (a), find_spec
+          would still return None for novelmodel.py in every
+          submodule because no such file exists.
+       c. ValueError: Either Model has attr 'input_type', or arg
+          'loss_type' should exist in config. Fixed by adding
+          loss_type: CE.
+       d. TypeError: empty(): argument 'size' ... got NoneType. Fixed
+          by adding hidden_size: 128.
+
+[ ] *** NEXT *** Re-run the smoke test and verify it reaches
+    end-to-end (constructor -> forward -> calculate_loss ->
+    full_sort_predict -> at least one eval pass) with no
+    stack traces. Command, from repo root with conda env active:
+        python scripts/train.py --model NovelModel
+    The 3000-row smoke .inter files are still in data/amazon_m2/
+    from the earlier preprocess run. Numbers will be garbage; the
+    pass criterion is exit code 0 and a final test-metric block
+    in stdout. If it crashes, diagnose from the traceback.
+
+[ ] Restore the full-data .inter split before any further
+    training or evaluation. The smoke test left
+    data/amazon_m2/amazon_m2.{train,valid,test}.inter as a
+    3000-row subset. Re-run the deterministic seeded preprocessor:
+        python scripts/preprocess.py
+    No --nrows. SEED=42 inside preprocess.py keeps the split
+    identical to the one used to train the existing GRU4Rec / NARM
+    / Pop checkpoints. The per-locale test_<locale>.inter files
+    do NOT need to be regenerated - they were not overwritten by
+    the smoke run (smoke only touches train/valid/test).
+
 [ ] Train novel method on full dataset, record metrics.
 [ ] Ablation experiments -- required regardless of result. The
     paper's Table 5 is the template: add attribute types one at a

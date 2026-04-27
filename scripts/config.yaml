@@ -22,3 +22,15 @@ valid_metric: 'MRR@100'
 data_path: data/
 
 train_neg_sample_args: ~ # No negative sampling
+
+TITLE_EMBEDDING_PATH: 'data/amazon_m2/title_embeddings.pt'
+BRAND_EMBEDDING_PATH: 'data/amazon_m2/brand_embeddings.pt'
+COLOR_EMBEDDING_PATH: 'data/amazon_m2/color_embeddings.pt'
+PRICE_BINS_PATH: 'data/amazon_m2/price_bins.pt'
+
+n_price_bins: 32
+num_layers: 1
+dropout_prob: 0.3
+num_heads: 4
+loss_type: CE
+hidden_size: 128
