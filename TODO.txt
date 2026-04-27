@@ -1020,28 +1020,95 @@ NOVEL METHOD:
        d. TypeError: empty(): argument 'size' ... got NoneType. Fixed
           by adding hidden_size: 128.
 
-[ ] *** NEXT *** Re-run the smoke test and verify it reaches
-    end-to-end (constructor -> forward -> calculate_loss ->
-    full_sort_predict -> at least one eval pass) with no
-    stack traces. Command, from repo root with conda env active:
-        python scripts/train.py --model NovelModel
-    The 3000-row smoke .inter files are still in data/amazon_m2/
-    from the earlier preprocess run. Numbers will be garbage; the
-    pass criterion is exit code 0 and a final test-metric block
-    in stdout. If it crashes, diagnose from the traceback.
+[x] First smoke-test attempt failed (2026-04-27): exit 1 inside
+    recbole.utils.utils.get_flops at quick_start.py:141. RecBole's
+    FLOP counter wraps the model and calls self.model.predict(interaction)
+    for parameter accounting; AbstractRecommender.predict raises
+    NotImplementedError by default. We had implemented forward,
+    calculate_loss, and full_sort_predict but never predict.
 
-[ ] Restore the full-data .inter split before any further
-    training or evaluation. The smoke test left
-    data/amazon_m2/amazon_m2.{train,valid,test}.inter as a
-    3000-row subset. Re-run the deterministic seeded preprocessor:
-        python scripts/preprocess.py
-    No --nrows. SEED=42 inside preprocess.py keeps the split
-    identical to the one used to train the existing GRU4Rec / NARM
-    / Pop checkpoints. The per-locale test_<locale>.inter files
-    do NOT need to be regenerated - they were not overwritten by
-    the smoke run (smoke only touches train/valid/test).
+[x] predict(interaction) method added to scripts/novel_model.py
+    (2026-04-27). Inserted between calculate_loss and full_sort_predict.
+    Body:
+      1. item_seq = interaction[self.ITEM_SEQ] -> (batch, max_seq_len)
+      2. item_seq_lengths = interaction[self.ITEM_SEQ_LEN] -> (batch,)
+      3. item_candidates = interaction[self.ITEM_ID] -> (batch,)
+         -- NOT self.POS_ITEM_ID. predict scores arbitrary candidates;
+         POS_ITEM_ID would only work during training where the target
+         is known.
+      4. sequence_embeddings = self.forward(item_seq, item_seq_lengths)
+         -> (batch, hidden_size)
+      5. candidate_embeddings = self.item_embedding(item_candidates)
+         -> (batch, hidden_size)
+      6. return torch.sum(sequence_embeddings * candidate_embeddings,
+                          dim=1) -> (batch,)
+    Same row-wise dot-product scoring rule used by calculate_loss
+    (sum-reduced) and full_sort_predict (matmul against full vocab).
+    Consistency across the three RecBole entry points is required:
+    if predict scored differently, get_flops would report wrong
+    parameter counts AND any sampled-candidate eval mode would
+    disagree with full-sort.
+    No torch.no_grad() / model.eval() inside the body -- the trainer
+    wraps eval calls in both already, and hard-coding either inside
+    predict would break the get_flops caller (which builds an
+    autograd graph) and any future gradient-needing caller.
 
-[ ] Train novel method on full dataset, record metrics.
+[x] Smoke test PASSED end-to-end (2026-04-27, exit 0):
+    - Best valid (epoch 54): mrr@100 0.0049, recall@100 0.02,
+      ndcg@100 0.0076.
+    - Test result: mrr@100 0.005, recall@100 0.0067, ndcg@100 0.0054.
+    - Numbers garbage as expected (3000 sessions / 13163 items, no
+      signal to learn). Pass criterion was pipeline reachability,
+      not metric quality.
+    - Pipeline reached: constructor -> forward -> calculate_loss
+      (training, 65 epochs with early stop) -> predict (FLOP probe at
+      startup) -> full_sort_predict (per-epoch validation + final
+      test). Checkpoint written to
+      saved/NovelModel-Apr-27-2026_17-55-46.pth.
+    - Loader's "Missing 1380794 out of 1393956 items" alarm fired
+      four times (once per attribute) as expected for the smoke-vocab
+      subset. Will fall silent on full-data runs.
+
+[x] Wrapper edits for clean-clone reproducibility (2026-04-27):
+    - submit_training.sh: appended one line
+        sbatch --job-name=NovelModel run_training.sbatch NovelModel
+      after the existing GRU4Rec / NARM / Pop lines. run_training.sbatch
+      itself is already model-parameterized (takes $1 as model name)
+      and required no edits.
+    - submit_evaluation.sh: inserted one line
+        sbatch --job-name=NovelModel run_evaluation.sbatch NovelModel
+      between the NARM and Pop lines. NO trailing NDCG arg --
+      NovelModel was trained with NDCG already in config.yaml, so
+      its checkpoint emits NDCG natively. The trailing NDCG on
+      GRU4Rec / NARM is a pre-existing backfill mechanism for older
+      checkpoints; copying it to NovelModel would imply the same
+      need and mislead future readers.
+    - Pop's eval line (run_pop_evaluation.sbatch) is unchanged --
+      Pop has its own hand-rolled eval path independent of
+      run_evaluation.sbatch.
+
+[x] Full-data .inter split restore submitted to cluster (2026-04-27,
+    sbatch job 1873177). The smoke test left
+    data/amazon_m2/amazon_m2.{train,valid,test}.inter as a 3000-row
+    subset; this run re-fires the deterministic seeded preprocessor
+    (SEED=42 inside preprocess.py) so the split is byte-identical
+    to the one the existing GRU4Rec / NARM / Pop checkpoints were
+    trained against. Per-locale test_<locale>.inter files do NOT
+    need to be regenerated -- preprocess.py only writes train/valid/
+    test, not the locale slices.
+    Verification gate before downstream training:
+      - squeue -j 1873177 returns no rows (or sacct shows COMPLETED)
+      - wc -l data/amazon_m2/amazon_m2.train.inter ~= 2.88M (80% of
+        3.6M sessions plus header), NOT 2400.
+
+[ ] *** NEXT *** Train novel method on full dataset, record metrics.
+    After preprocess job 1873177 reports COMPLETED and the .inter
+    line counts verify, fire the one-off:
+        sbatch --job-name=NovelModel run_training.sbatch NovelModel
+    Do NOT submit while preprocess is still queued or running --
+    both jobs touch the same .inter files. Walltime is 7 days in
+    run_training.sbatch; expect ~20-30 hours given GRU4Rec took
+    ~10 hours and NovelModel adds a cross-attention pass per step.
 [ ] Ablation experiments -- required regardless of result. The
     paper's Table 5 is the template: add attribute types one at a
     time (title only, title+brand, title+brand+price, all four)
@@ -1155,17 +1222,35 @@ scripts/novel_model.py           - NovelModel(SequentialRecommender)
                                    and cross_attn
                                    (nn.MultiheadAttention,
                                    batch_first=True).
-                                   forward/calculate_loss/full_sort_predict
-                                   bodies are still stubs raising
-                                   NotImplementedError; signatures
-                                   are typed. Config keys consumed
-                                   but not yet in config.yaml:
+                                   ALL FOUR RecBole-required method
+                                   bodies implemented: forward
+                                   returns FloatTensor[batch,
+                                   hidden_size] (GRU session state +
+                                   cross-attended item-attribute
+                                   bag); calculate_loss returns
+                                   F.cross_entropy(fused @
+                                   item_embedding.weight.T, target);
+                                   predict returns row-wise dot
+                                   product (fused * item_embedding(
+                                   ITEM_ID)).sum(dim=1) of shape
+                                   (batch,) for sampled-candidate
+                                   eval and RecBole's get_flops
+                                   probe; full_sort_predict returns
+                                   raw scores fused @
+                                   item_embedding.weight.T of shape
+                                   (batch, num_items). All three
+                                   scoring methods use the same
+                                   dot-product rule. Config keys
+                                   consumed (all wired into
+                                   scripts/config.yaml):
                                    TITLE_EMBEDDING_PATH,
                                    BRAND_EMBEDDING_PATH,
                                    COLOR_EMBEDDING_PATH,
                                    PRICE_BINS_PATH, n_price_bins,
                                    num_layers, dropout_prob,
-                                   num_heads.
+                                   num_heads, hidden_size, loss_type.
+                                   Smoke-tested end-to-end on the
+                                   3000-row split 2026-04-27.
 create_env.sh                    - Environment setup
 run_preprocessing.sbatch         - Slurm job script for preprocessing
 run_training.sbatch              - Parameterized Slurm job script for training
@@ -1181,8 +1266,16 @@ run_encode_text_attributes.sbatch - Slurm job for encode_text_attribute.py;
                                     submissions do not collide on logs.
                                     1 GPU, 1h walltime; ~2 min per column
                                     at batch 256.
-submit_training.sh               - Wrapper that submits GRU4Rec + NARM + Pop jobs
-submit_evaluation.sh             - Wrapper that submits GRU4Rec + NARM + Pop eval
+submit_training.sh               - Wrapper that submits GRU4Rec + NARM + Pop +
+                                   NovelModel training jobs (4 sbatches, all via
+                                   run_training.sbatch with distinct --job-name
+                                   values).
+submit_evaluation.sh             - Wrapper that submits GRU4Rec + NARM + NovelModel
+                                   eval via run_evaluation.sbatch (NDCG extra-metric
+                                   appended only on the GRU4Rec / NARM lines because
+                                   their checkpoints predate NDCG in config.yaml;
+                                   NovelModel was trained with NDCG and needs no
+                                   backfill) plus Pop via run_pop_evaluation.sbatch.
 submit_embedding.sh              - Wrapper that submits title, brand, and color
                                    encoding jobs with distinct --job-name
                                    values (embed_title, embed_brand,

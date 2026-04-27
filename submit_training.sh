@@ -6,3 +6,4 @@ set -e
 sbatch --job-name=GRU4Rec run_training.sbatch GRU4Rec
 sbatch --job-name=NARM run_training.sbatch NARM
 sbatch --job-name=Pop run_training.sbatch Pop
+sbatch --job-name=NovelModel run_training.sbatch NovelModel

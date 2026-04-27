@@ -114,6 +114,23 @@ class NovelModel(SequentialRecommender):
         # Now we have output predicted "probabilities" (if we soft-maxed) over all next possible items
         return F.cross_entropy(logits, target)
     
+    def predict(self, interaction) -> torch.FloatTensor:
+        """Predict most likely next product according to output mode logits
+
+        Args:
+            interaction (RecBole Interaction batch object): Holds item_id_list, item_id_list_length, and target item_id
+
+        Returns:
+            torch.FloatTensor: Prediction over entire batch of next product
+        """
+        item_seq = interaction[self.ITEM_SEQ] # Shape (batch, max_seq_len)
+        item_seq_lengths = interaction[self.ITEM_SEQ_LEN] # Shape (batch,)
+        item_candidates = interaction[self.ITEM_ID] # Shape (batch,)
+        sequence_embeddings = self.forward(item_seq, item_seq_lengths) # Shape (batch, hidden_size)
+        candidate_embeddings = self.item_embedding(item_candidates) # Shape (batch, hidden_size)
+        # Dot product of sequence embedding with candidate embedding over batch
+        return torch.sum(sequence_embeddings * candidate_embeddings, dim=1) # Shape (batch,)
+    
     def full_sort_predict(self, interaction) -> torch.FloatTensor:
         """Calculate next item prediction scores associated with this interaction
 
