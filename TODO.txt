@@ -834,37 +834,76 @@ NOVEL METHOD:
         silently made the whole file a SyntaxError. Re-read the full
         file after every edit; partial-edit artifacts are easy to
         leave behind.
-[ ] *** NEXT *** Implement forward(item_seq, item_seq_len) body.
-    Signature already typed; stub currently raises NotImplementedError(0).
-    Planned body (GRU4Rec-clone at this stage -- attributes not yet
-    invoked):
+[x] forward(item_seq, item_seq_len) body implemented (2026-04-27).
+    GRU4Rec backbone:
       1. item_seq_emb = self.item_embedding(item_seq)
-         -> [batch, max_seq_len, hidden_size]
       2. item_seq_emb_dropout = self.emb_dropout(item_seq_emb)
+         -- USE the registered self.emb_dropout module, NOT a fresh
+         nn.Dropout() inside forward. A freshly-instantiated dropout
+         is not a registered child of the model and stays
+         training=True forever; model.eval() will silently apply
+         dropout to test data. Caught and fixed during this step.
       3. gru_output, _ = self.gru(item_seq_emb_dropout)
-         -- keep per-timestep output, discard h_n (h_n only gives the
-         last position of the max_seq_len axis, which is almost
-         always padded).
+         -- keep per-timestep output, discard h_n.
       4. session_state = self.gather_indexes(gru_output,
-                                             item_seq_len - 1)
-         -- gather_indexes is inherited from SequentialRecommender;
-         the `- 1` converts length-count to zero-based index of the
-         final real timestep.
-      5. return session_state
-    After this, the class is structurally a GRU4Rec up through
-    forward. Attribute bag assembly + cross-attention + scoring are
-    the next two steps (items below, not yet broken out).
-[ ] Extend forward to assemble the per-item attribute bag
-    ([num_items, 4, hidden_size] from projected title/brand/color +
-    price_embedding lookup). Cache on first call; it's static across
-    batches.
-[ ] Extend forward with the cross-attention pass and produce
-    full-vocab logits. Query = session state, keys/values =
-    attribute bag. Output logits = dot(session_state +
-    attended_attributes, item_embedding).
-[ ] Implement calculate_loss (CE loss on logits vs target) and
-    full_sort_predict (returns full-vocab logits unchanged). Both
-    are short once forward is done.
+                                             item_seq_len - 1).
+[x] Attribute-bag assembly inside forward (2026-04-27). Project
+    title/brand/color (nn.Linear, learnable, 384 -> hidden_size) and
+    look up price (nn.Embedding lookup on self.price_bin_idx);
+    torch.stack(..., dim=1) into attr_bag of shape
+    (num_items, 4, hidden_size). Recomputed every forward call,
+    NOT cached: the four projections are learnable, so the bag is
+    only static across the batch axis, not across optimizer steps.
+    The original TODO comment "cache on first call" was wrong.
+[x] Cross-attention pass inside forward (2026-04-27). Implemented as
+    Option B (session-conditioned attention over the session's own
+    items, NOT full vocab). The literal TODO reading -- query =
+    session state, K/V = full attribute bag -- would have allocated
+    ~734 GB of KV at batch=512, hidden=64; impossible. Option B
+    pipeline:
+      a. session_attr_bag = attr_bag[item_seq]
+         -> (batch, max_seq_len, 4, hidden_size)
+      b. session_attr_flat = session_attr_bag.flatten(1, 2)
+         -> (batch, max_seq_len * 4, hidden_size) -- collapse item
+         and attribute axes into one MHA source-sequence axis.
+      c. query = session_state.unsqueeze(1) -> (batch, 1, hidden_size)
+      d. key_padding_mask = (item_seq == 0).repeat_interleave(4, 1)
+         -> (batch, max_seq_len * 4) bool, True at PAD positions.
+         repeat_interleave (NOT .repeat) is required so each item's
+         4 attribute positions share its PAD flag in alignment with
+         the flatten order from step b.
+      e. attended, _ = self.cross_attn(query, session_attr_flat,
+            session_attr_flat, key_padding_mask=key_padding_mask,
+            need_weights=False).
+      f. attended = attended.squeeze(1) -> (batch, hidden_size).
+    forward then returns session_state + attended of shape
+    (batch, hidden_size). Logit computation is deferred to
+    calculate_loss / full_sort_predict so the same forward body
+    serves both code paths, matching RecBole convention.
+[ ] *** NEXT *** Implement calculate_loss(interaction) and
+    full_sort_predict(interaction). Both are short now that forward
+    returns the fused session-attribute representation.
+    calculate_loss:
+      - Pull item_seq, item_seq_len, target = interaction[ITEM_SEQ],
+        interaction[ITEM_SEQ_LEN], interaction[POS_ITEM_ID] (use the
+        config field names, available as self.ITEM_SEQ etc. on
+        SequentialRecommender).
+      - fused = self.forward(item_seq, item_seq_len)
+        -> (batch, hidden_size).
+      - logits = fused @ self.item_embedding.weight.T
+        -> (batch, num_items).
+      - Return F.cross_entropy(logits, target).
+    full_sort_predict:
+      - Same fused-extraction as above.
+      - Return logits = fused @ self.item_embedding.weight.T
+        unchanged. RecBole's eval pipeline expects raw scores, not
+        softmaxed.
+    Pitfall: do NOT score against item_embedding(item_seq); score
+    against the full vocabulary table self.item_embedding.weight.
+    Pitfall: row 0 of item_embedding is the PAD row (all zeros from
+    padding_idx=0). The dot product will yield score 0 at index 0.
+    RecBole filters PAD from the eval ranking, so this is fine; do
+    not zero it out yourself.
 [ ] Wire NovelModel into RecBole's training pipeline: register it in
     train.py (RecBole looks up models by class name in its registry;
     custom classes need either a model_path override or an explicit

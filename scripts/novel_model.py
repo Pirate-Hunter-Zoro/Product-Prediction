@@ -53,9 +53,48 @@ class NovelModel(SequentialRecommender):
             item_seq_len (torch.LongTensor): Shape (batch) of true sequence length of each session
 
         Returns:
-            torch.FloatTensor: Session state
+            torch.FloatTensor: Shape (batch, hidden_size). GRU session state
+                fused (additive) with the cross-attention summary over the
+                session's per-item attribute bag.
         """
-        raise NotImplementedError(0)
+        # Input is (batch, max_seq_len) - embed each item
+        item_seq_emb = self.item_embedding(item_seq) # Output is (batch, max_seq_len, hidden_size)
+        item_seq_emb_dropout = self.emb_dropout(item_seq_emb) # Prevent model from memorizing any single input row
+        # Run through GRU
+        gru_output, _ = self.gru(item_seq_emb_dropout) # Shape (batch, max_seq_len, hidden_size)
+        # Pull out one vector from each session - the hidden state at the last real item (subtract 1 for the actual index)
+        session_state = self.gather_indexes(gru_output, item_seq_len - 1) # Shape (batch, hidden_size) - per-session representation
+        
+        # AT THIS POINT, we've basically replicated GRU4Rec
+        
+        # Use embedding projections - input shape (N, in_features), output shape (N, out_features)
+        title_proj = self.title_proj(self.title_embeddings) # Underlying nn.Linear
+        brand_proj = self.brand_proj(self.brand_embeddings)
+        color_proj = self.color_proj(self.color_embeddings)
+        
+        # Produce per-item price vector - each item falls in a price bin which gets a vector from our price embedding table
+        # Input shape (num_items,) - each item falls in a price bin
+        price_proj = self.price_embedding(self.price_bin_idx) # Output shape (num_items, hidden_size)
+        
+        # Stack all of the projections - shape (num_items, 4, hidden_size)
+        attr_bag = torch.stack([title_proj, brand_proj, color_proj, price_proj], dim=1)
+        
+        # Now for cross attention
+        # Recall item_seq is of shape (batch, max_seq_len)
+        session_attr_bag = attr_bag[item_seq] # shape (batch, max_seq_len, 4, hidden_size)
+        session_attr_flat = session_attr_bag.flatten(start_dim=1, end_dim=2) # shape (batch, max_seq_len * 4, hidden_size)
+        # Add target-seq axis so session_state can act as MHA query (batch_first=True)
+        unsqueezed_session_state = session_state.unsqueeze(dim=1) # shape (batch, 1, hidden_size)
+        # Create a padding mask
+        padding_mask = item_seq == 0 # shape (batch, max_seq_len)
+        # But recall we have 4 attributes we embedded
+        padding_mask = padding_mask.repeat_interleave(4, dim=1) # shape (batch, 4*max_seq_len)
+        # Actual call for cross attention - query, key, value - result is shape (batch, 1, hidden_size)
+        attended, _ = self.cross_attn(unsqueezed_session_state, session_attr_flat, session_attr_flat, key_padding_mask=padding_mask, need_weights=False)
+        attended = attended.squeeze(dim=1) # (batch, hidden_size)
+        
+        # Return fused session (from GRU) with attended state
+        return session_state + attended
     
     def calculate_loss(self, interaction) -> torch.FloatTensor:
         """Calculate numeric loss associated with interaction
