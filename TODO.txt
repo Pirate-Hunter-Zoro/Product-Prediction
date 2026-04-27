@@ -880,26 +880,38 @@ NOVEL METHOD:
     (batch, hidden_size). Logit computation is deferred to
     calculate_loss / full_sort_predict so the same forward body
     serves both code paths, matching RecBole convention.
-[ ] *** NEXT *** Implement calculate_loss(interaction) and
-    full_sort_predict(interaction). Both are short now that forward
-    returns the fused session-attribute representation.
-    calculate_loss:
-      - Pull item_seq, item_seq_len, target = interaction[ITEM_SEQ],
-        interaction[ITEM_SEQ_LEN], interaction[POS_ITEM_ID] (use the
-        config field names, available as self.ITEM_SEQ etc. on
-        SequentialRecommender).
-      - fused = self.forward(item_seq, item_seq_len)
-        -> (batch, hidden_size).
-      - logits = fused @ self.item_embedding.weight.T
-        -> (batch, num_items).
-      - Return F.cross_entropy(logits, target).
-    full_sort_predict:
-      - Same fused-extraction as above.
-      - Return logits = fused @ self.item_embedding.weight.T
-        unchanged. RecBole's eval pipeline expects raw scores, not
-        softmaxed.
-    Pitfall: do NOT score against item_embedding(item_seq); score
-    against the full vocabulary table self.item_embedding.weight.
+[x] calculate_loss(interaction) body implemented (2026-04-27).
+    Added `import torch.nn.functional as F` at the top of the file.
+    Body:
+      1. item_sequence = interaction[self.ITEM_SEQ]
+         -> (batch, max_seq_len). Local bound to `item_sequence`
+         (not `item_seq`) to disambiguate from the existing forward
+         parameter name when read in isolation.
+      2. item_seq_len = interaction[self.ITEM_SEQ_LEN] -> (batch,).
+      3. target = interaction[self.POS_ITEM_ID] -> (batch,).
+      4. fused_output = self.forward(item_sequence, item_seq_len)
+         -> (batch, hidden_size).
+      5. logits = torch.matmul(fused_output,
+                               self.item_embedding.weight.T)
+         -> (batch, num_items). torch.matmul(...) is equivalent to
+         the `@` operator; either works.
+      6. return F.cross_entropy(logits, target). Combined log-softmax
+         + NLL averaged over the batch -- 0-dim FloatTensor that
+         RecBole's trainer backprops through.
+    Pitfalls confirmed (and avoided):
+      - Did NOT score against item_embedding(item_sequence); scored
+        against the full vocabulary table item_embedding.weight.
+      - Did NOT manually zero row 0 (PAD). target is always in
+        [1, num_items-1], so cross-entropy is unaffected.
+[ ] *** NEXT *** Implement full_sort_predict(interaction). Same
+    fused-extraction as calculate_loss (item_sequence, item_seq_len
+    pulled from interaction; fused_output = self.forward(...)), then
+    return logits = fused_output @ self.item_embedding.weight.T
+    UNCHANGED -- RecBole's eval pipeline expects raw scores, not
+    softmaxed. Do NOT pull POS_ITEM_ID here; the eval pipeline scores
+    the full vocab and computes ranking metrics itself.
+    Pitfall: do NOT score against item_embedding(item_sequence);
+    score against the full vocabulary table self.item_embedding.weight.
     Pitfall: row 0 of item_embedding is the PAD row (all zeros from
     padding_idx=0). The dot product will yield score 0 at index 0.
     RecBole filters PAD from the eval ranking, so this is fine; do

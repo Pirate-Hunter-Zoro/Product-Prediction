@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from pathlib import Path
+import torch.nn.functional as F
 from recbole.model.abstract_recommender import SequentialRecommender
 
 from attribute_loader import load_text_embedding, load_price_bins
@@ -105,7 +105,14 @@ class NovelModel(SequentialRecommender):
         Returns:
             torch.FloatTensor: Associated loss
         """
-        raise NotImplementedError()
+        item_sequence = interaction[self.ITEM_SEQ] # Shape (batch, max_seq_len)
+        item_seq_len = interaction[self.ITEM_SEQ_LEN] # Shape (batch,)
+        target = interaction[self.POS_ITEM_ID] # Shape (batch,)
+        fused_output = self.forward(item_sequence, item_seq_len) # Shape (batch, hidden_size)
+        # Recall that item_embedding.weight is Shape (num_items, hidden_size), so we take its transpose
+        logits = torch.matmul(fused_output, self.item_embedding.weight.T) # Shape (batch, num_items)
+        # Now we have output predicted "probabilities" (if we soft-maxed) over all next possible items
+        return F.cross_entropy(logits, target)
     
     def full_sort_predict(self, interaction) -> torch.FloatTensor:
         """Calculate next item prediction scores associated with this interaction
