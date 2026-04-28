@@ -1,0 +1,24 @@
+\frametitle{NovelModel forward walkthrough}
+\vspace{-0.6em}
+\scriptsize
+\begin{verbatim}
+def forward(self, item_seq, item_seq_len):
+    # item_seq: (B, T) item ids, 0 = PAD.  item_seq_len: (B,) real lengths.
+    x          = self.emb_dropout(self.item_embedding(item_seq))   # (B, T, H)
+    gru_out, _ = self.gru(x)                # (B, T, H); 2nd return (n_layers, B, H) discarded
+    state      = self.gather_indexes(gru_out, item_seq_len - 1)    # (B, H)
+    K = len(self.active_item_attributes)
+    proj = []
+    for attr in self.active_item_attributes:                       # iterates 1..4 active slots
+        if   attr == `title': proj.append(self.title_proj(self.title_embeddings))
+        elif attr == `brand': proj.append(self.brand_proj(self.brand_embeddings))
+        elif attr == `color': proj.append(self.color_proj(self.color_embeddings))
+        elif attr == `price': proj.append(self.price_embedding(self.price_bin_idx))
+    attr_bag = torch.stack(proj, dim=1)                            # (n_items, K, H)
+    sess_bag = attr_bag[item_seq].flatten(1, 2)                    # (B, T*K, H)
+    pad_mask = (item_seq == 0).repeat_interleave(K, dim=1)         # (B, T*K)
+    attn, _  = self.cross_attn(state.unsqueeze(1), sess_bag, sess_bag,
+                               key_padding_mask=pad_mask)          # (B, 1, H)
+    return state + attn.squeeze(1)                                 # (B, H)
+\end{verbatim}
+\scriptsize Logits in \code{calculate\_loss}: \code{output @ self.item\_embedding.weight.T}, shape \((B,\ \texttt{n\_items})\). The \code{item\_embedding} on line 3 above and the score node of the diagram are the same tensor.

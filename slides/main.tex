@@ -2,23 +2,19 @@
 \usetheme{metropolis}
 
 % --- metropolis knobs --------------------------------------------------------
-% progressbar=none stays: removing it resurrects the calc-overflow at \section
-% on first compile (see README, "Known Issues").
+% progressbar=none stays: removing it resurrects a calc-overflow at \section
+% on first compile before the aux file exists.
 \metroset{progressbar=none}
-\metroset{sectionpage=progressbar}
+\metroset{sectionpage=simple}
 \metroset{numbering=fraction}
 \metroset{block=fill}
 
 % --- fonts: libertinus body + inconsolata mono -------------------------------
-% fontspec is already pulled in by metropolis (lualatex toolchain). Overrides
-% must come AFTER \usetheme{metropolis} so they win against Fira.
+% fontspec is already pulled in by metropolis. Overrides must come AFTER
+% \usetheme{metropolis} so they win against Fira.
 \usepackage{fontspec}
 \setsansfont{Libertinus Sans}[Ligatures=TeX]
 \setmainfont{Libertinus Serif}[Ligatures=TeX]
-% Inconsolata's CTAN package ships its OTF as "Inconsolatazi4-*" (the "zi4"
-% variant — zen + inconsolata + 4 weights — see CTAN: tex-archive/fonts/inconsolata).
-% fontspec will not resolve the name "Inconsolata" against this filename; we
-% have to spell out the family + weights explicitly.
 \setmonofont{Inconsolatazi4}[
   Extension   = .otf,
   UprightFont = *-Regular,
@@ -31,6 +27,7 @@
 \definecolor{tuBlue}{HTML}{1F4E79}
 \definecolor{tuBlueLight}{HTML}{2E75B6}
 \definecolor{tuGold}{HTML}{C8A951}
+\definecolor{softGray}{HTML}{F4F6F8}
 
 \setbeamercolor{normal text}{fg=black!88, bg=white}
 \setbeamercolor{alerted text}{fg=tuGold!85!black}
@@ -47,21 +44,25 @@
 \setbeamercolor{block title alerted}{bg=tuGold!18, fg=tuGold!50!black}
 \setbeamercolor{block body alerted}{bg=tuGold!6,   fg=black!88}
 
-% --- typography polish -------------------------------------------------------
+% --- typography and graphics -------------------------------------------------
 \usepackage{microtype}
 \usepackage{booktabs}
 \usepackage{graphicx}
+\usepackage{array}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit}
 \graphicspath{{../plots/}}
 
-% institutional rule on the title page (sits under the title separator,
-% giving the cover slide a published-paper masthead feel)
 \setbeamertemplate{title separator}{%
   \begin{tikzpicture}
     \fill[tuGold] (0,0) rectangle (\textwidth, 1.2pt);
     \fill[tuBlue] (0,-3pt) rectangle (\textwidth, -3pt - 0.4pt);
   \end{tikzpicture}\par\vspace{0.4em}%
 }
-\usepackage{tikz}
+
+\newcommand{\metric}[1]{\textsc{#1}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\best}[1]{\textbf{#1}}
 
 % --- metadata ----------------------------------------------------------------
 \title{Amazon-M2 Next Product Recommendation}
@@ -78,22 +79,358 @@
   \tableofcontents
 \end{frame}
 
-\section{Task and Dataset}
+\section{Problem}
 
-\begin{frame}{Task and Dataset}
-  Placeholder for task definition and Amazon-M2 dataset description.
+\begin{frame}{Task}
+  \begin{block}{Goal}
+    Given a shopping session, rank the next product the user will interact with.
+  \end{block}
+
+  \vspace{0.4em}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.52\textwidth}
+      \textbf{Input}
+      \begin{itemize}
+        \item Ordered product history: \(\left[i_1, i_2, \ldots, i_t\right]\)
+        \item Session id used as the user field for RecBole
+        \item Product metadata: title, brand, color, price
+      \end{itemize}
+
+    \column{0.43\textwidth}
+      \textbf{Evaluation}
+      \begin{itemize}
+        \item Full-sort ranking over the item vocabulary
+        \item \metric{MRR@100}, \metric{Recall@100}, \metric{NDCG@100}
+        \item Reported overall and per locale
+      \end{itemize}
+  \end{columns}
+
+  \vspace{0.6em}
+  \footnotesize Dataset and task follow Amazon-M2 Task 1 from the KDD Cup 2023 multilingual recommendation challenge.
 \end{frame}
 
-\section{Method}
+\begin{frame}{Dataset Scale}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.43\textwidth}
+      \begin{tabular}{lr}
+        \toprule
+        Locale & Train sessions \\
+        \midrule
+        UK & 1.18M \\
+        DE & 1.11M \\
+        JP & 979K \\
+        IT & 127K \\
+        FR & 118K \\
+        ES & 89K \\
+        \bottomrule
+      \end{tabular}
 
-\begin{frame}{Method}
-  Placeholder for cross-attention model architecture.
+    \column{0.52\textwidth}
+      \begin{itemize}
+        \item About 3.6M sessions across 1.4M products
+        \item Six locales with a heavy imbalance between large and small markets
+        \item Sessions are short: mean about 4 items, median 3
+        \item Catalog is long-tailed and multilingual
+      \end{itemize}
+  \end{columns}
+
+  \vspace{0.8em}
+  \begin{alertblock}{Practical consequence}
+    The model must learn from short sequences while ranking against a very large product vocabulary.
+  \end{alertblock}
+\end{frame}
+
+\begin{frame}{Why This Is Not Just GRU4Rec}
+  \begin{itemize}
+    \item The Amazon-M2 paper reports that naive title-embedding fusion often hurts sequential models.
+    \item The same paper calls effective textual-feature use an open problem.
+    \item Popularity is protocol-sensitive: on this seeded split, next items are disjoint from their session histories.
+    \item Small locales score differently from large locales, so one headline number hides important behavior.
+  \end{itemize}
+
+  \vspace{0.7em}
+  \begin{block}{Project angle}
+    Keep strong sequential baselines, then test whether a more structured attribute-fusion path can use metadata without drowning the sequence signal.
+  \end{block}
+\end{frame}
+
+\section{Pipeline}
+
+\begin{frame}{Implementation Pipeline}
+  \begin{center}
+  \resizebox{\textwidth}{!}{%
+  \begin{tikzpicture}[
+      node distance=0.45cm and 0.8cm,
+      box/.style={draw=tuBlue!55, fill=tuBlue!5, rounded corners=2pt,
+                  minimum height=0.78cm, align=center, font=\small},
+      arrow/.style={-{Latex[length=2mm]}, thick, draw=tuBlue!80}
+    ]
+    \node[box, minimum width=2.2cm] (raw) {Raw CSVs\\sessions/products};
+    \node[box, minimum width=2.3cm, right=of raw] (inter) {Seeded split\\RecBole \code{.inter}};
+    \node[box, minimum width=2.3cm, right=of inter] (attrs) {Attribute artifacts\\embeddings + bins};
+    \node[box, minimum width=2.3cm, right=of attrs] (train) {Train models\\GPU cluster};
+    \node[box, minimum width=2.2cm, right=of train] (eval) {Per-locale\\evaluation};
+
+    \draw[arrow] (raw) -- (inter);
+    \draw[arrow] (inter) -- (attrs);
+    \draw[arrow] (attrs) -- (train);
+    \draw[arrow] (train) -- (eval);
+  \end{tikzpicture}%
+  }
+  \end{center}
+
+  \vspace{0.4em}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.48\textwidth}
+      \textbf{Reproducibility}
+      \begin{itemize}
+        \item Seeded 80/10/10 split with \code{SEED=42}
+        \item Evaluation loads latest checkpoint by model name
+        \item Per-locale test files preserve RecBole schema
+      \end{itemize}
+
+    \column{0.48\textwidth}
+      \textbf{Scale handling}
+      \begin{itemize}
+        \item Full-data training runs on the GPU cluster
+        \item Smoke tests use \code{--nrows}
+        \item Plot scripts parse Slurm JSON logs directly
+      \end{itemize}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Baselines}
+  \begin{tabular}{p{0.22\textwidth}p{0.25\textwidth}p{0.43\textwidth}}
+    \toprule
+    Model & Role & Implementation detail \\
+    \midrule
+    Popularity & Non-neural baseline & Hand-rolled counter over train histories and targets; RecBole \code{Pop} was incompatible with the sequential setup. \\
+    GRU4Rec & Sequential baseline & RecBole GRU encoder over item-id sequences with cross-entropy ranking loss. \\
+    NARM & Attention baseline & RecBole neural attentive recommendation model for session-based ranking. \\
+    NovelModel & Proposed method & GRU session encoder plus cross-attention over title, brand, color, and price attributes. \\
+    \bottomrule
+  \end{tabular}
+
+  \vspace{0.8em}
+  \footnotesize Popularity is reported honestly as a negative baseline on this split; its paper-level performance is not reproduced under this evaluation protocol.
+\end{frame}
+
+\section{Novel Method}
+
+\begin{frame}{Motivation}
+  \begin{block}{Observation from prior work}
+    Amazon-M2 experiments show that simply adding multilingual title embeddings can reduce ranking quality.
+  \end{block}
+
+  \vspace{0.4em}
+  \begin{itemize}
+    \item The sequence of item ids is already a strong collaborative signal.
+    \item Metadata is useful only if the model can decide when to attend to it.
+    \item Cross-attention gives the session state a controlled way to query item attributes.
+  \end{itemize}
+
+  \vspace{0.6em}
+  \begin{alertblock}{Novelty}
+    Instead of concatenating metadata to item ids, the model lets the session representation attend over a small per-item attribute bag.
+  \end{alertblock}
+\end{frame}
+
+\begin{frame}{Attribute Construction}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.5\textwidth}
+      \textbf{Text attributes}
+      \begin{itemize}
+        \item Title, brand, and color
+        \item Encoded with \code{paraphrase-multilingual-MiniLM-L12-v2}
+        \item 384-dimensional, L2-normalized vectors
+        \item Aligned to RecBole internal item ids
+      \end{itemize}
+
+    \column{0.45\textwidth}
+      \textbf{Price}
+      \begin{itemize}
+        \item 32 train-only quantile bins
+        \item Learned embedding per bin
+        \item Robust to extreme catalog price outliers
+        \item Reserved sentinel for padding or missing bins
+      \end{itemize}
+  \end{columns}
+
+  \vspace{0.8em}
+  \begin{block}{Catalog coverage}
+    Every item referenced by the session data has a catalog row, so the model does not need an unknown-attribute fallback.
+  \end{block}
+\end{frame}
+
+\begin{frame}{NovelModel Architecture}
+  \begin{center}
+  \resizebox{0.95\textwidth}{!}{%
+  \begin{tikzpicture}[
+      node distance=0.45cm and 0.85cm,
+      box/.style={draw=tuBlue!55, fill=tuBlue!5, rounded corners=2pt,
+                  minimum height=0.72cm, align=center, font=\scriptsize},
+      attr/.style={draw=tuGold!70!black, fill=tuGold!10, rounded corners=2pt,
+                  minimum height=0.56cm, align=center, font=\scriptsize},
+      arrow/.style={-{Latex[length=2mm]}, thick, draw=tuBlue!80}
+    ]
+    \node[box, minimum width=2.4cm] (seq) {Item-id sequence};
+    \node[box, minimum width=2.2cm, right=of seq] (gru) {Embedding\\+ GRU};
+    \node[box, minimum width=2.35cm, right=of gru] (state) {Session state\\query};
+
+    \node[attr, below=1.0cm of gru, xshift=-1.8cm] (title) {Title};
+    \node[attr, right=0.25cm of title] (brand) {Brand};
+    \node[attr, right=0.25cm of brand] (color) {Color};
+    \node[attr, right=0.25cm of color] (price) {Price bin};
+    \node[box, minimum width=3.0cm, right=0.75cm of price] (bag) {Session attribute bag\\keys / values};
+    \node[box, minimum width=2.3cm, right=of state] (attn) {Multi-head\\cross-attention};
+    \node[box, minimum width=2.6cm, right=of attn] (score) {Dot with learned\\\code{item\_embedding}};
+
+    \draw[arrow] (seq) -- (gru);
+    \draw[arrow] (gru) -- (state);
+    \draw[arrow] (title) -- (bag);
+    \draw[arrow] (brand) -- (bag);
+    \draw[arrow] (color) -- (bag);
+    \draw[arrow] (price) -- (bag);
+    \draw[arrow] (state) -- (attn);
+    \draw[arrow] (bag) -- (attn);
+    \draw[arrow] (attn) -- (score);
+    \draw[arrow] (state) to[bend left=18] node[midway, above, font=\scriptsize]{$+$} (score);
+  \end{tikzpicture}%
+  }
+  \end{center}
+
+  \vspace{0.6em}
+  {\footnotesize
+  \textbf{Shapes used on the next slide:}
+  \(B\) = batch size,\;
+  \(T\) = padded session length,\;
+  \(H\) = \code{hidden\_size} = 128,\;
+  \(K\) = \code{len(self.active\_item\_attributes)} \(\in\{1,2,3,4\}\),\;
+  \texttt{n\_items} \(\approx\) 1.4M.
+
+  \vspace{0.3em}
+  The score box reuses the \emph{same} \code{nn.Embedding(n\_items, H)} that turns input ids into vectors for the GRU on the left --- tied input/output weights.
+  }
+\end{frame}
+
+\begin{frame}[fragile]{NovelModel forward walkthrough}
+\vspace{-0.6em}
+\scriptsize
+\begin{verbatim}
+def forward(self, item_seq, item_seq_len):
+    # item_seq: (B, T) item ids, 0 = PAD.  item_seq_len: (B,) real lengths.
+    x          = self.emb_dropout(self.item_embedding(item_seq))   # (B, T, H)
+    gru_out, _ = self.gru(x)                # (B, T, H); 2nd return (n_layers, B, H) discarded
+    state      = self.gather_indexes(gru_out, item_seq_len - 1)    # (B, H)
+    K = len(self.active_item_attributes)
+    proj = []
+    for attr in self.active_item_attributes:                       # iterates 1..4 active slots
+        if   attr == `title': proj.append(self.title_proj(self.title_embeddings))
+        elif attr == `brand': proj.append(self.brand_proj(self.brand_embeddings))
+        elif attr == `color': proj.append(self.color_proj(self.color_embeddings))
+        elif attr == `price': proj.append(self.price_embedding(self.price_bin_idx))
+    attr_bag = torch.stack(proj, dim=1)                            # (n_items, K, H)
+    sess_bag = attr_bag[item_seq].flatten(1, 2)                    # (B, T*K, H)
+    pad_mask = (item_seq == 0).repeat_interleave(K, dim=1)         # (B, T*K)
+    attn, _  = self.cross_attn(state.unsqueeze(1), sess_bag, sess_bag,
+                               key_padding_mask=pad_mask)          # (B, 1, H)
+    return state + attn.squeeze(1)                                 # (B, H)
+\end{verbatim}
+\scriptsize Logits in \code{calculate\_loss}: \code{output @ self.item\_embedding.weight.T}, shape \((B,\ \texttt{n\_items})\). The \code{item\_embedding} on line 3 above and the score node of the diagram are the same tensor.
+\end{frame}
+
+\begin{frame}{Training Configuration}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.48\textwidth}
+      \textbf{Shared setup}
+      \begin{itemize}
+        \item RecBole 1.2.0 with PyTorch
+        \item Full-sort evaluation
+        \item Top-\(K=100\)
+        \item Metrics: \metric{MRR}, \metric{Recall}, \metric{NDCG}
+      \end{itemize}
+
+    \column{0.48\textwidth}
+      \textbf{NovelModel}
+      \begin{itemize}
+        \item Hidden size: 128
+        \item GRU layers: 1
+        \item Dropout: 0.3
+        \item Attention heads: 4
+        \item Loss: cross entropy over all items
+      \end{itemize}
+  \end{columns}
+
+  \vspace{0.8em}
+  \begin{block}{Ablation hook}
+    \code{attribute\_slots} can train title-only, title+brand, title+brand+price, or full title+brand+color+price variants without changing model code.
+  \end{block}
 \end{frame}
 
 \section{Results}
 
-\begin{frame}{Results}
-  Placeholder for evaluation results (plots, metrics, ablation).
+\begin{frame}{Evaluation Metrics}
+  Each test session has exactly one held-out next item. Let \(r_s\) be the rank of that item in the model's full-vocabulary ranking for session \(s\); a session contributes \(0\) when \(r_s > 100\). All three metrics are means over the \(N\) test sessions.
+
+  \vspace{0.5em}
+  \begin{itemize}
+    \item \metric{MRR@100} \(=\ \tfrac{1}{N}\sum_{s} \tfrac{1}{r_s}\,\mathbf{1}[r_s \le 100]\). Reciprocal rank --- rank 1 scores 1.0, rank 10 scores 0.1, rank 100 scores 0.01. Punishes slipping down the list.
+
+    \item \metric{Recall@100} \(=\ \tfrac{1}{N}\sum_{s} \mathbf{1}[r_s \le 100]\). Equivalent to HitRate@100 here (single positive per session): did the true item make the top 100, yes or no.
+
+    \item \metric{NDCG@100} \(=\ \tfrac{1}{N}\sum_{s} \tfrac{1}{\log_2(r_s+1)}\,\mathbf{1}[r_s \le 100]\). Log-discounted hit; same shape as MRR but gentler --- rank 1 scores 1.0, rank 10 scores \(\approx 0.29\), rank 100 scores \(\approx 0.15\).
+  \end{itemize}
+
+  \vspace{0.4em}
+  \footnotesize Recall is the easiest to satisfy; MRR is the strictest. NDCG sits between them.
+\end{frame}
+
+\begin{frame}{Overall Test Results}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.55\textwidth}
+      \scriptsize
+      \resizebox{\linewidth}{!}{%
+      \begin{tabular}{lccc}
+        \toprule
+        Model & \metric{MRR@100} & \metric{Recall@100} & \metric{NDCG@100} \\
+        \midrule
+        Popularity & 0.0001 & 0.0018 & 0.0004 \\
+        NARM       & 0.1522 & 0.3637 & 0.1951 \\
+        GRU4Rec    & \best{0.1609} & \best{0.3852} & \best{0.2061} \\
+        NovelModel & \multicolumn{3}{c}{full test evaluation pending} \\
+        \bottomrule
+      \end{tabular}%
+      }
+
+    \column{0.4\textwidth}
+      \begin{itemize}
+        \item Headline scope is all six locales.
+        \item GRU4Rec is the strongest completed test run.
+        \item NARM tracks slightly below GRU4Rec.
+        \item Popularity collapses under this split and protocol.
+      \end{itemize}
+  \end{columns}
+
+  \vspace{0.7em}
+  \footnotesize NovelModel full-data training was in progress on April 28, 2026; validation had reached about 0.181 MRR@100 by epoch 20.
+\end{frame}
+
+\begin{frame}{Model Comparison Plot}
+  \begin{center}
+    \includegraphics[width=0.91\textwidth,height=0.73\textheight,keepaspectratio]{model_comparison.png}
+  \end{center}
+
+  \vspace{-0.4em}
+  \footnotesize The plot script leaves NovelModel as a blank/NaN bar until \code{slurm\_logs/evaluation\_NovelModel\_out.txt} exists.
+\end{frame}
+
+\begin{frame}{Per-Locale Behavior}
+  \begin{center}
+    \includegraphics[width=0.95\textwidth,height=0.72\textheight,keepaspectratio]{per_locale.png}
+  \end{center}
+
+  \vspace{-0.4em}
+  \footnotesize The smaller locales score higher here; that makes the all-six-locale result a different object from the paper's UK/DE/JP-only overall number.
 \end{frame}
 
 \end{document}

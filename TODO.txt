@@ -1435,6 +1435,69 @@ DELIVERABLES:
       * Confirm NovelModel evaluation log lands before the
         Results frame is finalized -- the two plot scripts
         currently render NovelModel as NaN bars.
+    Content progress 2026-04-28 (afternoon, refining the
+    Codex-generated first draft):
+      * Initial Codex draft = 21 frames spanning 5 sections +
+        a 3-frame Backup appendix. Trimmed to 20 pages = 16
+        content frames + 4 section pages, no appendix.
+      * REMOVED frames: Paper-Parity Scope, What the Popularity
+        Result Means, Conclusions, Next Steps (took out
+        \section{Takeaways} with them); Exact Per-Locale Test
+        Metrics, Implementation Artifacts, Known Limitations
+        (entire Backup appendix removed by user). Talk now ends
+        on the Per-Locale plot. Open question for next session:
+        whether to bookend with a single Thanks/Questions slide
+        or a "what's left" frame on the still-pending ablations.
+      * ADDED Evaluation Metrics frame at the head of
+        \section{Results} defining MRR@100, Recall@100, NDCG@100
+        with rank notation r_s and concrete rank-1/-10/-100
+        scoring numbers so the audience can feel the differences
+        before the results table hits.
+      * NovelModel Architecture frame split into TWO frames:
+        - Frame A (regular): the existing TikZ diagram, score
+          node relabeled "Dot with learned item_embedding", a
+          "+" label added on the residual state->score arrow.
+          Below the diagram: shape glossary B/T/H/K/n_items and
+          a one-liner explaining that the score node reuses the
+          SAME nn.Embedding(n_items, H) that feeds the GRU
+          (tied input/output weights, ~1.4M-row table).
+        - Frame B ([fragile]): scripts/novel_model.py forward()
+          replicated at \scriptsize verbatim. Iterates
+          self.active_item_attributes via if/elif (NOT a
+          hardcoded all-four list -- preserves the slot-toggle
+          ablation surface). Shape comment per load-bearing
+          line: (B, T, H), (B, H), (n_items, K, H), (B, T*K, H),
+          (B, T*K), (B, 1, H), (B, H). Footer line on this
+          frame names the logit step explicitly as
+          output @ self.item_embedding.weight.T of shape
+          (B, n_items), pointing at the same item_embedding
+          tensor used on line 3 of the snippet.
+      * Beamer fragile-frame gotcha hit and resolved: wrapping
+        \begin{verbatim} in a {\scriptsize ...} group breaks
+        the frame's verbatim tokenization with "Paragraph ended
+        before \beamer@verbatim@framesubtitle was complete."
+        Fix is to apply \scriptsize as a switch (no group) and
+        keep the verbatim block flush against the frame body
+        with no surrounding braces. Title also avoids \code{}
+        macros to dodge the same parser. Documented here in
+        case it bites again.
+      * Build verified: lualatex x2 produces a 20-page PDF.
+        Only Overfull \vbox warning is the 13.8pt cosmetic one
+        on \maketitle (already documented as harmless).
+      * OPEN ITEM for next session -- paper citation scope
+        correction. Earlier draft of the Motivation slide
+        leaned on the "naive title fusion hurts" claim from
+        the paper without specifying which table/task. Paper's
+        Table 5 ablation is on Task 2 (domain-shift, supervised
+        on ES/FR/IT only), NOT Task 1. The qualitative finding
+        (every metric drops when adding MiniLM title vectors
+        to GRU4Rec++/SRGNN) holds, but the slide language
+        should say "paper Table 5 ablation on the Task 2
+        small-locale supervised setting" not "the paper's
+        Task 1 results." Verified our GRU4Rec UK/DE/JP-only
+        weighted Overall = 0.1551 MRR / 0.3702 Recall sits
+        ~10-12% behind paper Table 3 GRU4Rec++ = 0.1757 MRR /
+        0.3808 Recall -- normal reproduction drift, not a bug.
 [ ] Write up the project report (LaTeX or Markdown) -- due later
     than the slides; specific date not given. Reuse the figures
     rendered by plot_model_comparison.py / plot_per_locale.py
