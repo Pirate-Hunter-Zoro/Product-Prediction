@@ -1,11 +1,73 @@
-\documentclass{beamer}
+\documentclass[10pt,aspectratio=169]{beamer}
 \usetheme{metropolis}
-\metroset{progressbar=none}
 
+% --- metropolis knobs --------------------------------------------------------
+% progressbar=none stays: removing it resurrects the calc-overflow at \section
+% on first compile (see README, "Known Issues").
+\metroset{progressbar=none}
+\metroset{sectionpage=progressbar}
+\metroset{numbering=fraction}
+\metroset{block=fill}
+
+% --- fonts: libertinus body + inconsolata mono -------------------------------
+% fontspec is already pulled in by metropolis (lualatex toolchain). Overrides
+% must come AFTER \usetheme{metropolis} so they win against Fira.
+\usepackage{fontspec}
+\setsansfont{Libertinus Sans}[Ligatures=TeX]
+\setmainfont{Libertinus Serif}[Ligatures=TeX]
+% Inconsolata's CTAN package ships its OTF as "Inconsolatazi4-*" (the "zi4"
+% variant — zen + inconsolata + 4 weights — see CTAN: tex-archive/fonts/inconsolata).
+% fontspec will not resolve the name "Inconsolata" against this filename; we
+% have to spell out the family + weights explicitly.
+\setmonofont{Inconsolatazi4}[
+  Extension   = .otf,
+  UprightFont = *-Regular,
+  BoldFont    = *-Bold,
+  Scale       = 0.95
+]
+
+% --- color: slate-blue accent replacing default mDarkTeal --------------------
+\usepackage{xcolor}
+\definecolor{tuBlue}{HTML}{1F4E79}
+\definecolor{tuBlueLight}{HTML}{2E75B6}
+\definecolor{tuGold}{HTML}{C8A951}
+
+\setbeamercolor{normal text}{fg=black!88, bg=white}
+\setbeamercolor{alerted text}{fg=tuGold!85!black}
+\setbeamercolor{example text}{fg=tuBlueLight}
+
+\setbeamercolor{frametitle}{bg=tuBlue, fg=white}
+\setbeamercolor{title separator}{fg=tuGold}
+\setbeamercolor{progress bar}{fg=tuBlue, bg=tuBlue!20}
+\setbeamercolor{progress bar in head/foot}{fg=tuBlue, bg=tuBlue!20}
+\setbeamercolor{progress bar in section page}{fg=tuBlue, bg=tuBlue!20}
+
+\setbeamercolor{block title}{bg=tuBlue!12, fg=tuBlue}
+\setbeamercolor{block body}{bg=tuBlue!4,  fg=black!88}
+\setbeamercolor{block title alerted}{bg=tuGold!18, fg=tuGold!50!black}
+\setbeamercolor{block body alerted}{bg=tuGold!6,   fg=black!88}
+
+% --- typography polish -------------------------------------------------------
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\graphicspath{{../plots/}}
+
+% institutional rule on the title page (sits under the title separator,
+% giving the cover slide a published-paper masthead feel)
+\setbeamertemplate{title separator}{%
+  \begin{tikzpicture}
+    \fill[tuGold] (0,0) rectangle (\textwidth, 1.2pt);
+    \fill[tuBlue] (0,-3pt) rectangle (\textwidth, -3pt - 0.4pt);
+  \end{tikzpicture}\par\vspace{0.4em}%
+}
+\usepackage{tikz}
+
+% --- metadata ----------------------------------------------------------------
 \title{Amazon-M2 Next Product Recommendation}
-\subtitle{Session-Based Sequential Recommendation with Cross-Attention over Item Attributes}
+\subtitle{Session-Based Sequential Recommendation\\with Cross-Attention over Item Attributes}
 \author{Mikey Ferguson}
-\institute{The University of Tulsa}
+\institute{The University of Tulsa \\ \textit{Graduate course final project}}
 \date{\today}
 
 \begin{document}

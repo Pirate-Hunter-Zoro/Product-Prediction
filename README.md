@@ -68,7 +68,7 @@ data/
 saved/                     Model checkpoints
 slurm_logs/                Slurm stdout/stderr logs
 plots/                     Rendered figures (`model_comparison.png`, `per_locale.png`); gitignored
-slides/                    Beamer presentation source. `main.tex` is the root file (metropolis theme, progressbar disabled to dodge a known calc-overflow bug at `\section` on first compile). Build artifacts (`.aux`, `.log`, `.nav`, `.snm`, `.toc`, `.out`, `.synctex.gz`) are gitignored; `main.pdf` may or may not be tracked depending on local preference.
+slides/                    Beamer presentation source. `main.tex` is the root file (metropolis theme, progressbar disabled to dodge a known calc-overflow bug at `\section` on first compile, 16:9 aspect ratio, fraction page numbering). Visual restyle 2026-04-28 swaps Fira for Libertinus Sans (body) + Libertinus Serif (titles, picked up by metropolis on title and section pages) and Inconsolata (mono); accent color is slate-blue (`#1F4E79`) with a gold (`#C8A951`) title-separator rule, replacing metropolis's default `mDarkTeal`. Build artifacts (`.aux`, `.log`, `.nav`, `.snm`, `.toc`, `.out`, `.synctex.gz`) are gitignored; `main.pdf` may or may not be tracked depending on local preference.
 ```
 
 ## Environment Setup
@@ -235,10 +235,29 @@ This unpacks into `~/.TinyTeX/` and symlinks the binaries into `~/.local/bin/` (
 ```bash
 tlmgr install beamer pgf etoolbox translator hyperref \
               fira fontspec pgfopts \
-              beamertheme-metropolis
+              beamertheme-metropolis \
+              libertinus libertinus-fonts libertinus-otf \
+              inconsolata microtype booktabs
 ```
 
 Note the canonical CTAN name is `beamertheme-metropolis`, not `metropolis`. `tlmgr install metropolis` will fail with "package not present in repository".
+
+The `libertinus` / `inconsolata` / `microtype` / `booktabs` block was added 2026-04-28 alongside the slides visual restyle (Libertinus Sans body + Libertinus Serif headings + Inconsolata mono, plus microtype's protrusion + expansion for tighter Beamer paragraphs). `fira` stays installed because metropolis's font theme still references it during package load even when the body fonts are overridden afterwards.
+
+#### Known font-loader quirk: `Inconsolata` does not register under that name
+
+CTAN's `inconsolata` package ships its OTFs as `Inconsolatazi4-Regular.otf` and `InconsolataN-Regular.otf` (the "zi4" / "N" variants), and `luaotfload` indexes them under those filenames — `\setmonofont{Inconsolata}` fails with `fontspec Error: The font "Inconsolata" cannot be found`. `slides/main.tex` works around this by spelling the filename out:
+
+```latex
+\setmonofont{Inconsolatazi4}[
+  Extension   = .otf,
+  UprightFont = *-Regular,
+  BoldFont    = *-Bold,
+  Scale       = 0.95
+]
+```
+
+Renaming `Inconsolatazi4` back to `Inconsolata` will resurrect the error.
 
 #### Known toolchain quirk: broken `latexmk`
 

@@ -1346,13 +1346,67 @@ DELIVERABLES:
         latexmk entirely -- builds use a "lualatex x2" recipe.
       * tlmgr packages installed: beamer, pgf, etoolbox,
         translator, hyperref, beamertheme-metropolis, fira,
-        fontspec, pgfopts.
+        fontspec, pgfopts. Visual restyle 2026-04-28 added
+        libertinus, libertinus-fonts, libertinus-otf,
+        inconsolata, microtype, booktabs.
       * Repo scaffolding: slides/main.tex (metropolis theme,
         progressbar=none to dodge the calc-overflow bug at
         \section on first pass; title metadata wired to
         "The University of Tulsa"; placeholder frames for
         Task/Dataset, Method, Results). slides/main.pdf builds
         clean as 8 pages.
+    Visual restyle COMPLETE 2026-04-28 (Option 2 — strong restyle):
+      * Class options: 16:9 aspect ratio (aspectratio=169),
+        10pt base. Added \metroset knobs sectionpage=progressbar,
+        numbering=fraction (footer renders "n/N"), block=fill.
+      * Fonts (lualatex via fontspec, overrides applied AFTER
+        \usetheme{metropolis} so they win against Fira):
+          - \setsansfont{Libertinus Sans}     [body]
+          - \setmainfont{Libertinus Serif}    [picked up by
+            metropolis on title page + section pages, giving
+            them an academic serif treatment against the sans
+            body — happy accident, intentionally kept]
+          - \setmonofont{Inconsolatazi4}      [scale 0.95]
+        Inconsolata's CTAN package ships the OTF as
+        Inconsolatazi4-Regular.otf, NOT Inconsolata-*.
+        \setmonofont{Inconsolata} fails with
+        "fontspec Error: The font Inconsolata cannot be found";
+        the .tex spells out the filename + UprightFont/BoldFont
+        keys explicitly. Documented in the README's new "Known
+        font-loader quirk" subsection.
+      * Color palette: tuBlue #1F4E79 (slate-blue accent
+        replacing metropolis's mDarkTeal), tuBlueLight #2E75B6
+        (progress-bar fg, also alt accent), tuGold #C8A951
+        (alerted text + title-separator rule on the title page).
+        \setbeamercolor overrides applied to: normal text,
+        alerted text, example text, frametitle (bg=tuBlue),
+        title separator (fg=tuGold), all three progress bar
+        scopes, block title, block body, alerted block title,
+        alerted block body.
+      * Title separator template overridden to render a
+        tikz-drawn double rule: 1.2pt gold over a thinner blue
+        rule, mimicking a paper masthead. Pulls in tikz which
+        was already a metropolis dep.
+      * \graphicspath set to ../plots/ so frames can reference
+        plots/ figures by basename (model_comparison.png,
+        per_locale.png).
+      * microtype enabled for protrusion + expansion (tighter
+        line-end behavior on dense Beamer paragraphs).
+      * Subtitle line-broken with \\ so it no longer overflows
+        the title page. The metropolis \maketitle Overfull \vbox
+        warning at line 75 still fires (~14pt) and is still
+        cosmetically harmless — same warning the README's
+        "Known Issues" already documents.
+      * Build verified: lualatex x2 produces an 8-page PDF
+        cleanly (cover, outline, three section pages, three
+        content frames). Page numbering renders as "1/4 ... 4/4"
+        for the four numbered content/outline pages (section
+        pages are unnumbered, which is the metropolis default).
+      * README updated same day: Project Structure entry for
+        slides/ now records the font + color choices; the
+        "One-time toolchain install" tlmgr command appends the
+        six new packages; new "Known font-loader quirk"
+        subsection documents the Inconsolatazi4 workaround.
       * .vscode/settings.json updated with LaTeX Workshop
         config: lualatex absolute path, "lualatex x2" default
         recipe, autoBuild on save, autoClean glob method (not
