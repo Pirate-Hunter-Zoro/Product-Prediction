@@ -29,6 +29,7 @@ COLOR_EMBEDDING_PATH: 'data/amazon_m2/color_embeddings.pt'
 PRICE_BINS_PATH: 'data/amazon_m2/price_bins.pt'
 
 n_price_bins: 32
+attribute_slots: ['title', 'brand', 'color', 'price']
 num_layers: 1
 dropout_prob: 0.3
 num_heads: 4

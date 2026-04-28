@@ -23,17 +23,23 @@ quick_start.get_model = _patched_get_model
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, required=True)
+    parser.add_argument('--slots', type=str, nargs="+", choices=["title", "brand", "color", "price"], default=None, required=False)
     args = parser.parse_args()
     
     # Figure out what model we will be using - Recbole is weird so for our novel model we need a direct reference to its class
     # Due to monkey patch of loading model above, this should be redundant but harmless
     model_arg = NovelModel if args.model == "NovelModel" else args.model
+    config_dict = {}
+    if args.slots:
+        config_dict["attribute_slots"] = args.slots
+        print(f"Active slots: {str(args.slots)}", flush=True)
     
     print("Running recbole training...", flush=True)
     run_recbole(
         model=model_arg,
         dataset='amazon_m2',
-        config_file_list=['scripts/config.yaml']
+        config_file_list=['scripts/config.yaml'],
+        config_dict=config_dict # If this is empty, the config in the .yaml wins
     )
     
 if __name__=="__main__":

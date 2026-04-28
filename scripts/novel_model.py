@@ -5,6 +5,8 @@ from recbole.model.abstract_recommender import SequentialRecommender
 
 from attribute_loader import load_text_embedding, load_price_bins
 
+ATTRIBUTES = {"title", "brand", "price", "color"}
+
 class NovelModel(SequentialRecommender):
     
     def __init__(self, config, dataset):
@@ -17,13 +19,24 @@ class NovelModel(SequentialRecommender):
         super().__init__(config, dataset)
         self.n_price_bins = config["n_price_bins"]
         self.hidden_size = config["hidden_size"]
+        self.active_item_attributes = list(config['attribute_slots'])
+        if not (set(self.active_item_attributes) <= ATTRIBUTES):
+            raise ValueError(f"Expected attributes to be a subset of {str(ATTRIBUTES)} - fix config.yaml")
+        if "title" not in self.active_item_attributes:
+            raise ValueError(f"'title' must be present in attributes - fix config.yaml")
+        
+        
+        
         # The following calls need the n_price_bins and hidden_size attributes initialized
         self.register_buffer("title_embeddings", load_text_embedding(config["TITLE_EMBEDDING_PATH"], dataset))
-        self.register_buffer("brand_embeddings", load_text_embedding(config["BRAND_EMBEDDING_PATH"], dataset))
-        self.register_buffer("color_embeddings", load_text_embedding(config["COLOR_EMBEDDING_PATH"], dataset))
-        self.register_buffer("price_bin_idx", load_price_bins(config["PRICE_BINS_PATH"], dataset, n_bins=self.n_price_bins))
-        # Note we have an extra price bin because in case some item had no price bin, it will still have a price embedding
-        self.price_embedding = nn.Embedding(self.n_price_bins+1, self.hidden_size)
+        if "brand" in self.active_item_attributes:
+            self.register_buffer("brand_embeddings", load_text_embedding(config["BRAND_EMBEDDING_PATH"], dataset))
+        if "color" in self.active_item_attributes:
+            self.register_buffer("color_embeddings", load_text_embedding(config["COLOR_EMBEDDING_PATH"], dataset))
+        if "price" in self.active_item_attributes:
+            self.register_buffer("price_bin_idx", load_price_bins(config["PRICE_BINS_PATH"], dataset, n_bins=self.n_price_bins))
+            # Note we have an extra price bin because in case some item had no price bin, it will still have a price embedding
+            self.price_embedding = nn.Embedding(self.n_price_bins+1, self.hidden_size)
     
         # Obtain attributes necessary for forward method
         self.num_layers = config['num_layers']
@@ -40,8 +53,10 @@ class NovelModel(SequentialRecommender):
         # Need a projection from text embedding dimension space to hidden dimension space
         self.title_proj = nn.Linear(self.text_dim, self.hidden_size)
         # Similarly for all other projections
-        self.brand_proj = nn.Linear(self.text_dim, self.hidden_size)
-        self.color_proj = nn.Linear(self.text_dim, self.hidden_size)
+        if 'brand' in self.active_item_attributes:
+            self.brand_proj = nn.Linear(self.text_dim, self.hidden_size)
+        if 'color' in self.active_item_attributes:
+            self.color_proj = nn.Linear(self.text_dim, self.hidden_size)
         # Cross attention heads - to operate on the text, brand, and color projects once in hidden dimension space
         self.cross_attn = nn.MultiheadAttention(embed_dim=self.hidden_size, num_heads=self.num_heads, dropout=self.dropout_prob, batch_first=True)
     
@@ -68,27 +83,33 @@ class NovelModel(SequentialRecommender):
         # AT THIS POINT, we've basically replicated GRU4Rec
         
         # Use embedding projections - input shape (N, in_features), output shape (N, out_features)
-        title_proj = self.title_proj(self.title_embeddings) # Underlying nn.Linear
-        brand_proj = self.brand_proj(self.brand_embeddings)
-        color_proj = self.color_proj(self.color_embeddings)
+        K = len(self.active_item_attributes)
+        proj_list = [\
+                        self.title_proj(self.title_embeddings) if attr == "title" else\
+                            (self.brand_proj(self.brand_embeddings) if attr == "brand" else\
+                                (self.color_proj(self.color_embeddings) if attr == "color" else\
+                                    # Produce per-item price vector - each item falls in a price bin which gets a vector from our price embedding table
+                                    # Input shape (num_items,) - each item falls in a price bin 
+                                    # Output shape (num_items, hidden_size)
+                                    self.price_embedding(self.price_bin_idx)\
+                                )\
+                            )\
+                        for attr in self.active_item_attributes\
+                    ]
         
-        # Produce per-item price vector - each item falls in a price bin which gets a vector from our price embedding table
-        # Input shape (num_items,) - each item falls in a price bin
-        price_proj = self.price_embedding(self.price_bin_idx) # Output shape (num_items, hidden_size)
-        
-        # Stack all of the projections - shape (num_items, 4, hidden_size)
-        attr_bag = torch.stack([title_proj, brand_proj, color_proj, price_proj], dim=1)
+        # Stack all of the projections - shape (num_items, K, hidden_size), where K is the number of active attributes
+        attr_bag = torch.stack(proj_list, dim=1)
         
         # Now for cross attention
         # Recall item_seq is of shape (batch, max_seq_len)
-        session_attr_bag = attr_bag[item_seq] # shape (batch, max_seq_len, 4, hidden_size)
-        session_attr_flat = session_attr_bag.flatten(start_dim=1, end_dim=2) # shape (batch, max_seq_len * 4, hidden_size)
+        session_attr_bag = attr_bag[item_seq] # shape (batch, max_seq_len, K, hidden_size)
+        session_attr_flat = session_attr_bag.flatten(start_dim=1, end_dim=2) # shape (batch, max_seq_len * K, hidden_size)
         # Add target-seq axis so session_state can act as MHA query (batch_first=True)
         unsqueezed_session_state = session_state.unsqueeze(dim=1) # shape (batch, 1, hidden_size)
         # Create a padding mask
         padding_mask = item_seq == 0 # shape (batch, max_seq_len)
-        # But recall we have 4 attributes we embedded
-        padding_mask = padding_mask.repeat_interleave(4, dim=1) # shape (batch, 4*max_seq_len)
+        # But recall we have K attributes we embedded
+        padding_mask = padding_mask.repeat_interleave(K, dim=1) # shape (batch, K*max_seq_len)
         # Actual call for cross attention - query, key, value - result is shape (batch, 1, hidden_size)
         attended, _ = self.cross_attn(unsqueezed_session_state, session_attr_flat, session_attr_flat, key_padding_mask=padding_mask, need_weights=False)
         attended = attended.squeeze(dim=1) # (batch, hidden_size)

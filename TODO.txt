@@ -1100,6 +1100,84 @@ NOVEL METHOD:
       - wc -l data/amazon_m2/amazon_m2.train.inter ~= 2.88M (80% of
         3.6M sessions plus header), NOT 2400.
 
+[x] Slot-toggle ablation infrastructure (2026-04-27):
+    - scripts/config.yaml: added `attribute_slots: ['title', 'brand',
+      'color', 'price']` knob below n_price_bins. Canonical order;
+      iteration order of this list determines proj_list order in
+      forward. Subsetting it produces Table 5 ablations (e.g.
+      ['title'] = title-only, ['title','brand','price'] drops color).
+    - scripts/novel_model.py __init__: reads
+      config["attribute_slots"] into self.active_item_attributes,
+      validates as a non-empty subset of the module-level ATTRIBUTES
+      set {"title","brand","color","price"}, asserts "title" in
+      active (anchors self.text_dim, which is read from
+      self.title_embeddings.shape[1] -- making title presence
+      mandatory removes the need for a "find any text slot" branch).
+      brand / color register_buffer + nn.Linear allocations gated
+      behind `if "<slot>" in self.active_item_attributes`. price
+      register_buffer + price_embedding co-allocated under a single
+      `if "price" in active` block. title's register_buffer +
+      title_proj remain UNCONDITIONAL because the title-anchor
+      validation guarantees they fire -- wrapping them in an `if`
+      would be dead code. cross_attn allocation unconditional;
+      backbone (item_embedding, emb_dropout, GRU) unconditional.
+    - scripts/novel_model.py forward:
+      K = len(self.active_item_attributes) computed once after
+      session_state. proj_list built via list comprehension that
+      iterates self.active_item_attributes in canonical order and
+      selects via nested ternaries (title outermost; price as the
+      else fall-through, safe because subset validation forbids
+      any other slot string). torch.stack on proj_list produces
+      (num_items, K, hidden_size). repeat_interleave(K, dim=1)
+      replaces the prior hardcoded literal 4 -- mask shape
+      (batch, K*max_seq_len) now matches the K-dependent K/V
+      source-sequence length. cross_attn call unchanged.
+    - scripts/train.py: --slots argparse flag (nargs="+",
+      choices=["title","brand","color","price"], default=None).
+      When supplied, populates config_dict["attribute_slots"]
+      which run_recbole merges over config_file_list (config_dict
+      wins on conflict). When omitted, YAML default (full slot
+      list) stands -- existing GRU4Rec/NARM/Pop callers and the
+      no-arg NovelModel call are byte-identical to pre-edit.
+    - run_training.sbatch: shifts $1 (MODEL) off, then forwards
+      remaining $2..$N as `--slots <tokens>` to train.py via
+      unquoted SLOTS_ARGS expansion (word-splits into argparse
+      tokens). Same pattern as run_evaluation.sbatch's
+      --extra-metrics handling. Backwards-compatible: the three
+      existing call shapes (GRU4Rec, NARM, Pop, plain NovelModel)
+      produce byte-identical python invocations.
+    - Smoke test for the K=1 path is DEFERRED (user direction,
+      2026-04-27). Pre-flight gate when it does fire: wc -l on
+      amazon_m2.train.inter to confirm 3000-row vs full-data
+      state. K=1 (--slots title) is the most diagnostic
+      configuration because it exercises the leanest gating
+      path (no brand_proj / color_proj / price_embedding
+      allocations, single-element proj_list, mask shape
+      (batch, max_seq_len)).
+    - Pitfalls captured during this work, recorded for future
+      editors:
+      * The original list-comprehension structure had a hardcoded
+        title prefix AND no title branch in the inner ternary,
+        so iterating with attr="title" fell through to the price
+        else. Full-model proj_list became
+        [title_proj, price_proj, brand_proj, color_proj, price_proj]
+        -- five elements, price duplicated, semantics destroyed.
+        Catch: trace the comprehension by hand for every value of
+        attr before trusting it. The fix collapses the hardcoded
+        prefix and adds a title outermost branch in the ternary.
+      * The literal 4 in repeat_interleave is masked by K=4
+        (full model) but crashes MHA with shape mismatch on K!=4.
+        Hardcoded constants tied to a list length are a class of
+        bug that smoke-tests on the full configuration cannot
+        catch. K=1 is the diagnostic value.
+      * argparse `nargs="+"` requires at least one token. A bare
+        `--slots` with no following tokens crashes argparse
+        (correct: empty slot list is invalid).
+      * SLOTS_ARGS must be UNQUOTED at the python call site so
+        bash word-splits "--slots title brand" into three argv
+        tokens. Quoted, argparse rejects the single combined
+        token.
+
 [ ] *** NEXT *** Train novel method on full dataset, record metrics.
     After preprocess job 1873177 reports COMPLETED and the .inter
     line counts verify, fire the one-off:
@@ -1108,14 +1186,21 @@ NOVEL METHOD:
     both jobs touch the same .inter files. Walltime is 7 days in
     run_training.sbatch; expect ~20-30 hours given GRU4Rec took
     ~10 hours and NovelModel adds a cross-attention pass per step.
-[ ] Ablation experiments -- required regardless of result. The
-    paper's Table 5 is the template: add attribute types one at a
-    time (title only, title+brand, title+brand+price, all four)
-    and measure MRR/Recall/NDCG at each step. Per-locale slicing
-    already wired via evaluate.py; reuse it.
+[ ] Ablation experiments -- INFRASTRUCTURE READY (see slot-toggle
+    entry above). After full NovelModel training completes, fire
+    three sbatches:
+        sbatch --job-name=NovelModel_title run_training.sbatch NovelModel title
+        sbatch --job-name=NovelModel_titlebrand run_training.sbatch NovelModel title brand
+        sbatch --job-name=NovelModel_titlebrandprice run_training.sbatch NovelModel title brand price
+    The full-slot run is the already-pending main NovelModel
+    training; it doubles as the "all four" row of paper Table 5.
+    Per-locale slicing already wired via evaluate.py; reuse it for
+    each ablation checkpoint.
 
 PLOTS FOR REPORT (build after numbers are final; do NOT yak-shave
-plotting infrastructure ahead of results):
+plotting infrastructure ahead of results -- exception granted
+2026-04-27 to build infrastructure NOW with deferred numbers,
+plug results JSON in when ablations finish):
 [ ] Model-comparison bar chart. X-axis: Popularity, GRU4Rec, NARM,
     Novel. Y-axis: MRR@100 (and twin-axis or second chart for
     Recall@100). Mirrors paper Table 3 visually -- paper itself
@@ -1127,15 +1212,12 @@ plotting infrastructure ahead of results):
 [ ] Recall@K sweep curve. X: K from 1 to 100. Y: Recall@K. One
     curve per model. Shows retrieval shape, not just a fixed-K
     number. RecBole can compute Recall at multiple K in one pass.
-[ ] (Optional) Session-length slicing bar chart. Bucket test
-    sessions by input length (1, 2, 3, 4, 5+). MRR@100 per
-    bucket per model. Shows whether novel method helps short
-    vs long sessions.
-[ ] Repeat-pattern ratio per locale (paper Figure 2d). Cheap add
-    to data_investigation.ipynb; uses raw CSV, no model needed.
-[ ] Product frequency long-tail (paper Figure 2a) on log-log
-    axes. Probably already partially in data_investigation; clean
-    up and save as a figure file.
+[ ] (Optional) Session-length slicing bar chart -- DROPPED per
+    user direction 2026-04-27.
+[ ] (Optional) Repeat-pattern ratio per locale (paper Figure 2d) --
+    DROPPED per user direction 2026-04-27.
+[ ] (Optional) Product frequency long-tail (paper Figure 2a) on
+    log-log axes -- DROPPED per user direction 2026-04-27.
 
 DELIVERABLES:
 [ ] Write up the project report (LaTeX or Markdown)

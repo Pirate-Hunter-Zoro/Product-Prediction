@@ -18,6 +18,12 @@ if [ -z "$MODEL" ]; then
     exit 2
 fi
 
+shift # Renumber $2...$N to $1...$(N-1) by popping off the old $1
+SLOTS_ARGS=""
+if [ "$#" -gt 0 ]; then
+    SLOTS_ARGS="--slots $@" # Expand slots to all remaining arguments
+fi
+
 # ---- Conda configuration ----
 CONDA_ENV=amazon-m2-venv
 N_THREADS="${SLURM_CPUS_PER_TASK}"
@@ -36,4 +42,4 @@ mkdir -p slurm_logs
 # Explicitly pass the memory limit to srun to resolve the conflict
 which python
 python -c "import recbole; print(recbole.__file__)"
-python scripts/train.py --model "$MODEL"
+python scripts/train.py --model "$MODEL" $SLOTS_ARGS # Unquoted slots args for argument splitting
