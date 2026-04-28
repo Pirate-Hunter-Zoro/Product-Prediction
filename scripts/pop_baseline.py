@@ -5,6 +5,8 @@ from pathlib import Path
 from collections import Counter
 import pandas as pd
 
+LOCALES = ("UK", "DE", "JP", "IT", "FR", "ES")
+
 def build_popularity_ranking(train_path: Path, topk: int=100) -> tuple[list[str], Counter]:
     """Return most popular k items in decreasing order of popularity
 
@@ -62,7 +64,7 @@ def score_test_set(test_path: Path, ranking: list[str]) -> dict[str, float]:
     }
           
 def score_test_set_session_aware(test_path: Path, global_counter: Counter, topk: int) -> dict[str, float]:
-    """Obtain next product prediction scores given the most popular items
+    """Obtain next product prediction scores given the most popular items, but consider items in the order of their popularity in the input session
 
     Args:
         test_path (Path): path to amazon_m2.test.inter
@@ -116,12 +118,19 @@ def main():
     args = parser.parse_args()
     
     ranking, counter = build_popularity_ranking(args.train, args.topk)
-    metrics = score_test_set(args.test, ranking)
-    print("Global Metrics:")
-    print(json.dumps(metrics, indent=4), flush=True)
-    metrics = score_test_set_session_aware(args.test, counter, args.topk)
-    print("Session Metrics:")
-    print(json.dumps(metrics, indent=4), flush=True)
+    test_dir = Path(args.test).parent
+    results = {"global": {}, "session": {}}
+
+    # Full test score
+    results["global"]["Overall"] = score_test_set(args.test, ranking)
+    results["session"]["Overall"] = score_test_set_session_aware(args.test, counter, args.topk)
+
+    for locale in LOCALES:
+        locale_path = test_dir / f"amazon_m2.test_{locale.lower()}.inter"
+        results["global"][locale] = score_test_set(locale_path, ranking)
+        results["session"][locale] = score_test_set_session_aware(locale_path, counter, args.topk)
+
+    print(json.dumps(results, indent=4), flush=True)
 
 if __name__=="__main__":
     main()

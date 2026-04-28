@@ -572,7 +572,105 @@ COMPLETED
 
 IN PROGRESS
 -----------
-(none -- see REMAINING WORK)
+[x] NovelModel full-data training (2026-04-27 18:08 -> in flight as
+    of 2026-04-28 15:32). Job 1873374 array running, eval job
+    1873375 queued with (Dependency) status -- auto-fires the
+    moment training exits and writes
+    slurm_logs/evaluation_NovelModel_out.txt (locale-keyed JSON
+    matching the GRU4Rec / NARM evaluators). Last logged epoch:
+    20, valid_score 0.181200, ~1 hour per epoch, gain
+    decelerating ~0.0002/epoch. Default RecBole stopping_step=10
+    has not started counting (score still rising); convergence
+    expected within 5-15 more epochs, finishes well before the
+    Thursday 2026-04-30 slides deadline.
+
+CODE-COMPLETE 2026-04-28
+------------------------
+Plotting + Pop refactor (full chain of work, in dependency order):
+
+[x] scripts/pop_baseline.py rewritten to emit per-locale results.
+    main() rebuilds ranking + counter once, derives test_dir from
+    args.test, then loops over LOCALES = ("UK","DE","JP","IT","FR","ES")
+    calling score_test_set / score_test_set_session_aware on each
+    per-locale .inter (already produced by split_test_by_locale.py;
+    naming convention amazon_m2.test_<locale>.inter, lowercase
+    suffix). Emits a SINGLE json.dumps block with shape
+    {"global": {Overall, UK, DE, JP, IT, FR, ES},
+     "session": {Overall, UK, DE, JP, IT, FR, ES}}.
+    Old "Global Metrics:" / "Session Metrics:" two-block format
+    deleted -- the marker line was the only delimiter consumers
+    used to split the two halves. Re-ran sbatch
+    run_pop_evaluation.sbatch (job 1873409) under the new code;
+    Overall MRR landed at 0.00012669070443692507 -- byte-identical
+    to the previous run, confirms no regression in the scoring
+    functions.
+
+[x] scripts/plot_utils.py: load_pop_log function DELETED.
+    The old function split on the literal "Session Metrics:"
+    marker -- that marker no longer appears in pop_baseline.py
+    output. With the new format, both Pop and the deep-model
+    evaluation logs are single JSON blocks; load_eval_log's
+    first-{ to last-} slice handles both. Keeping a second
+    function would have been a byte-identical clone, which the
+    project's "avoid backwards-compatibility hacks" rule
+    rejects.
+
+[x] scripts/plot_model_comparison.py finalized.
+     * Import line dropped load_pop_log alongside the deletion above.
+     * collect_overall_metrics now reads Pop via load_eval_log,
+       drilling pop_data["global"]["Overall"][m] (matches the
+       deep-model access deep_data["Overall"][m] -- access pattern
+       now uniform across all four models).
+     * render_chart implemented:
+       output_path.parent.mkdir(parents=True, exist_ok=True);
+       ncols=len(METRICS) (was hardcoded 2 -- now scales if a
+       third metric is added); figsize=(6 * len(METRICS), 5);
+       squeeze=False so axes[0, i] indexing remains stable for
+       any METRICS length; bar_label(fmt="%.4f") because Pop's
+       MRR is ~1e-4 and %.2f would render it as 0.00.
+     * __main__ + argparse: --output <path> (type=Path,
+       required=True, no default).
+     * Smoke-test PASSED 2026-04-28: rendered
+       plots/model_comparison.png (60298 bytes). NovelModel a
+       NaN bar; auto-fills when its eval log lands.
+
+[x] scripts/plot_per_locale.py CREATED 2026-04-28.
+     * Module constants mirror plot_model_comparison
+       (SLURM_LOGS_DIR, MODELS, DEEP_MODEL_LOGS, POP_LOG_FILENAME,
+       METRICS) plus LOCALES = ("UK","DE","JP","IT","FR","ES").
+       Constants intentionally duplicated; refactoring shared
+       constants into plot_utils.py was rejected as premature
+       abstraction.
+     * collect_per_locale_metrics:
+       Pop drilled at pop_data["global"][locale][m] (skipping the
+       "Overall" and "session" subtrees we do not need here),
+       deep models at deep_data[locale][m] (no "global"
+       indirection on deep logs). math.nan fallback per
+       {model: {locale: {metric: nan}}} triple.
+     * render_per_locale_chart:
+       grouped-bar layout with bar_width = 0.8 / n_models so the
+       n_models bars span 0.8 of the unit gap and leave a 0.2
+       inter-group margin; offset = (j - (n_models-1)/2) * bar_width
+       centers the group on the integer x-anchor (np.arange).
+       No bar_label -- 24 numeric labels per subplot would
+       overlap. Per-subplot legend on each axes (fiddly figure-
+       legend placement skipped).
+     * __main__ + argparse: --output <path> (same shape as the
+       sibling script).
+     * Smoke-test PASSED 2026-04-28: rendered plots/per_locale.png
+       (46789 bytes).
+
+[x] README.md and TODO.txt updated 2026-04-28 to reflect the
+    above. README adds a "Plots" subsection under Usage, updates
+    the Pop baseline section to document the new unified JSON
+    shape and the load_pop_log deletion, and updates the
+    NovelModel row in the Models table to "Training in progress"
+    with the 2026-04-28 epoch-20 status snapshot. TODO updates
+    the FILES THAT MATTER entries for plot_utils, the two plot
+    scripts, and pop_baseline; PLOTS FOR REPORT marked complete
+    with the Recall@K curve dropped per user direction; the
+    DELIVERABLES list is re-anchored on the Thursday 2026-04-30
+    slides deadline.
 
 
 REMAINING WORK
@@ -1178,64 +1276,55 @@ NOVEL METHOD:
         tokens. Quoted, argparse rejects the single combined
         token.
 
-[ ] *** NEXT *** Train novel method on full dataset, record metrics.
-    After preprocess job 1873177 reports COMPLETED and the .inter
-    line counts verify, fire the one-off:
-        sbatch --job-name=NovelModel run_training.sbatch NovelModel
-    Do NOT submit while preprocess is still queued or running --
-    both jobs touch the same .inter files. Walltime is 7 days in
-    run_training.sbatch; expect ~20-30 hours given GRU4Rec took
-    ~10 hours and NovelModel adds a cross-attention pass per step.
-[ ] Ablation experiments -- INFRASTRUCTURE READY (see slot-toggle
-    entry above). After full NovelModel training completes, fire
-    three sbatches:
+[x] Train novel method on full dataset -- IN FLIGHT (see IN
+    PROGRESS section above). Submitted 2026-04-27 18:08 via
+    sbatch --job-name=NovelModel run_training.sbatch NovelModel
+    after preprocess job 1873177 completed. Evaluation auto-
+    fires via dependency job 1873375.
+[x] Ablation experiments -- DEPRIORITIZED 2026-04-28. The
+    infrastructure (slot-toggle wiring through train.py /
+    run_training.sbatch / config.yaml) is ready, but the user
+    declared the coding phase complete on 2026-04-28 with the
+    Thursday 2026-04-30 slides as the binding deadline.
+    Ablations remain unstarted; if time permits before the
+    paper deadline (later than slides), fire:
         sbatch --job-name=NovelModel_title run_training.sbatch NovelModel title
         sbatch --job-name=NovelModel_titlebrand run_training.sbatch NovelModel title brand
         sbatch --job-name=NovelModel_titlebrandprice run_training.sbatch NovelModel title brand price
-    The full-slot run is the already-pending main NovelModel
-    training; it doubles as the "all four" row of paper Table 5.
-    Per-locale slicing already wired via evaluate.py; reuse it for
-    each ablation checkpoint.
+    The full-slot run already in flight covers the "all four"
+    row of paper Table 5; per-locale slicing is already wired
+    via evaluate.py.
 
-PLOTS FOR REPORT (build after numbers are final; do NOT yak-shave
-plotting infrastructure ahead of results -- exception granted
-2026-04-27 to build infrastructure NOW with deferred numbers,
-plug results JSON in when ablations finish):
-[ ] Model-comparison bar chart -- INFRASTRUCTURE IN PROGRESS
-    (started 2026-04-27). X-axis: Popularity, GRU4Rec, NARM,
-    Novel. Y-axis: MRR@100 (and twin-axis or second chart for
-    Recall@100). Mirrors paper Table 3 visually -- paper itself
-    uses tables, not charts, so this is our contribution to
-    presentation.
-    Status as of 2026-04-27:
-      * scripts/plot_utils.py created with two slurm-log JSON
-        parsers shared across all plot scripts. load_eval_log
-        parses an evaluate.py log (one JSON block) by slicing
-        first-{ to last-} and calling json.loads, returns
-        Dict[str, Any]. load_pop_log splits a pop_baseline.py
-        log on the literal "Session Metrics:" marker (two JSON
-        blocks), runs the same first-{ to last-} slice on each
-        half, returns {"global": {...}, "session": {...}}.
-      * scripts/plot_model_comparison.py created with module
-        constants (SLURM_LOGS_DIR=Path("slurm_logs"),
-        MODELS=["GRU4Rec","NARM","NovelModel"], DEEP_MODEL_LOGS
-        f-string-built from MODELS, POP_LOG_FILENAME, METRICS=
-        ("mrr@100","recall@100")) and the collect_overall_metrics
-        function: reads Pop "global" mode + each deep model's
-        "Overall" scope, filters to METRICS, falls back to
-        math.nan for any missing log file (NovelModel log will
-        be missing until full training completes -- TODO line
-        1181, preprocess job 1873177 -> training).
-      * Pending: render_chart(results, output_path) function
-        (two side-by-side subplots, one per metric, with
-        ax.bar_label so Pop's ~1e-4 MRR is readable next to
-        GRU4Rec's ~0.15) and __main__ argparse glue (--output).
-[ ] Per-locale grouped bar chart. X-axis: UK, DE, JP, ES, FR, IT
-    (and optionally Overall). Bars grouped by model. Shows where
-    the novel method helps vs baselines across locales.
-[ ] Recall@K sweep curve. X: K from 1 to 100. Y: Recall@K. One
-    curve per model. Shows retrieval shape, not just a fixed-K
-    number. RecBole can compute Recall at multiple K in one pass.
+PLOTS FOR REPORT (infrastructure built 2026-04-27..28; auto-fills
+when NovelModel's evaluation log lands -- both scripts fall back
+to math.nan for any missing log file and render NaN bars
+correctly):
+[x] Model-comparison bar chart -- COMPLETE 2026-04-28.
+    scripts/plot_model_comparison.py. ncols=len(METRICS) side-by-
+    side subplots over Popularity, GRU4Rec, NARM, NovelModel for
+    the "Overall" (six-locale union) scope. bar_label(fmt="%.4f")
+    keeps Pop's ~1e-4 MRR readable next to deep-model bars near
+    0.15. CLI: --output <path>. Smoke-tested 2026-04-28; renders
+    plots/model_comparison.png (~60KB). NovelModel currently a
+    NaN bar; will populate when evaluation_NovelModel_out.txt
+    lands.
+[x] Per-locale grouped bar chart -- COMPLETE 2026-04-28.
+    scripts/plot_per_locale.py. ncols=len(METRICS) subplots, each
+    with 6 locale groups (UK, DE, JP, IT, FR, ES) and 4 model
+    bars per group. Bar offsets symmetrically anchored on
+    np.arange(len(LOCALES)) via
+    (j - (n_models-1)/2) * bar_width with bar_width = 0.8 /
+    n_models so groups stay separated. No bar_label (24 labels
+    per subplot would overlap); per-subplot legend maps color
+    to model. CLI: --output <path>. Smoke-tested 2026-04-28;
+    renders plots/per_locale.png (~47KB). NovelModel currently
+    6 NaN bars; will populate alongside the model-comparison
+    chart.
+[ ] Recall@K sweep curve -- DROPPED per user direction
+    2026-04-28. Would have required re-running every deep-
+    model evaluation with a multi-K topk list; the two
+    delivered charts already cover the comparison story for
+    the report and slides.
 [ ] (Optional) Session-length slicing bar chart -- DROPPED per
     user direction 2026-04-27.
 [ ] (Optional) Repeat-pattern ratio per locale (paper Figure 2d) --
@@ -1244,9 +1333,17 @@ plug results JSON in when ablations finish):
     log-log axes -- DROPPED per user direction 2026-04-27.
 
 DELIVERABLES:
-[ ] Write up the project report (LaTeX or Markdown)
-[ ] Prepare presentation slides if required
-[ ] Clean up code + README with run instructions
+[ ] Prepare presentation slides -- DUE THURSDAY 2026-04-30.
+    Coding phase declared complete 2026-04-28; pivot to slide
+    content now.
+[ ] Write up the project report (LaTeX or Markdown) -- due later
+    than the slides; specific date not given. Reuse the figures
+    rendered by plot_model_comparison.py / plot_per_locale.py
+    once NovelModel's evaluation log lands.
+[x] Clean up code + README with run instructions -- README and
+    TODO updated 2026-04-28 to reflect the unified pop_baseline.py
+    JSON format, the deletion of load_pop_log, the two completed
+    plot scripts, and the dropped Recall@K curve.
 
 
 FILES THAT MATTER
@@ -1257,8 +1354,26 @@ scripts/train.py                 - Training entrypoint
 scripts/evaluate.py              - Standalone evaluation of saved checkpoints
 scripts/locale_map.py            - Builds session_id -> locale parquet lookup
 scripts/split_test_by_locale.py  - Splits test.inter into per-locale slices
-scripts/pop_baseline.py          - Hand-rolled Popularity baseline
-                                   (global + session-aware modes)
+scripts/pop_baseline.py          - Hand-rolled Popularity baseline.
+                                   Emits a SINGLE JSON dict with shape
+                                   {"global": {Overall, UK, DE, JP, IT,
+                                   FR, ES}, "session": {...same locales}}
+                                   (rewritten 2026-04-28 from the old
+                                   two-block "Global Metrics:" /
+                                   "Session Metrics:" format). Both
+                                   ranking modes evaluated per-locale in
+                                   one pass; ranking + counter built
+                                   once outside the locale loop.
+                                   LOCALES = ("UK","DE","JP","IT","FR","ES")
+                                   module constant. Per-locale .inter
+                                   paths derived as
+                                   Path(args.test).parent /
+                                   f"amazon_m2.test_{locale.lower()}.inter".
+                                   Same scoring functions
+                                   (score_test_set,
+                                   score_test_set_session_aware) reused
+                                   without modification -- only main()
+                                   was rewritten.
 scripts/build_item_attributes.py - Builds per-item attribute parquet
                                    from products_train.csv filtered to
                                    the RecBole vocab (dedup by item_id,
@@ -1356,38 +1471,79 @@ scripts/novel_model.py           - NovelModel(SequentialRecommender)
                                    num_heads, hidden_size, loss_type.
                                    Smoke-tested end-to-end on the
                                    3000-row split 2026-04-27.
-scripts/plot_utils.py            - Slurm-log JSON parsers shared
-                                   across plot scripts. Two
-                                   functions, no CLI.
-                                   load_eval_log parses an
-                                   evaluate.py log (single JSON
-                                   block) by slicing first-{ to
-                                   last-} and calling json.loads;
+scripts/plot_utils.py            - Single shared parser for slurm
+                                   log JSON (one function, no CLI).
+                                   load_eval_log reads any
+                                   single-JSON-block log -- deep-
+                                   model evaluation logs AND the
+                                   new unified pop_baseline.py log
+                                   -- by slicing first-{ to last-}
+                                   and calling json.loads;
                                    returns Dict[str, Any].
-                                   load_pop_log parses a
-                                   pop_baseline.py log (two blocks
-                                   separated by the literal
-                                   "Session Metrics:" marker line)
-                                   by splitting on that marker
-                                   then running the same first-{
-                                   to last-} slice on each half;
-                                   returns {"global": {...},
-                                   "session": {...}}.
+                                   load_pop_log was DELETED
+                                   2026-04-28 once pop_baseline.py
+                                   was rewritten to emit a single
+                                   JSON block; the function had
+                                   become a byte-identical clone of
+                                   load_eval_log and consumers
+                                   already knew which log they were
+                                   reading from path alone.
 scripts/plot_model_comparison.py - Bar chart over Popularity,
                                    GRU4Rec, NARM, NovelModel for
                                    the "Overall" (six-locale
-                                   union) scope. IN PROGRESS as
-                                   of 2026-04-27:
-                                   collect_overall_metrics()
-                                   implemented (Pop loaded via
-                                   load_pop_log "global" mode;
-                                   deep baselines via
-                                   load_eval_log "Overall" key;
+                                   union) scope. COMPLETE 2026-04-28.
+                                   collect_overall_metrics(): Pop
+                                   loaded via load_eval_log then
+                                   drilled at pop_data["global"]
+                                   ["Overall"][m] (matches the
+                                   deep-model access pattern
+                                   deep_data["Overall"][m]); each
+                                   deep model loaded the same way;
                                    filtered to METRICS=
                                    ("mrr@100","recall@100");
-                                   math.nan placeholder for any
-                                   missing log file). render_chart
-                                   and __main__ argparse pending.
+                                   math.nan fallback for any
+                                   missing log file. render_chart
+                                   draws ncols=len(METRICS) side-
+                                   by-side subplots (squeeze=False
+                                   so axes[0,i] indexing stays
+                                   stable), bar_label(fmt="%.4f")
+                                   keeps Pop's ~1e-4 MRR readable.
+                                   __main__ + argparse: --output
+                                   <path> (type=Path, required=True);
+                                   render_chart auto-creates parent
+                                   directory.
+scripts/plot_per_locale.py       - Per-locale grouped bar chart
+                                   over the same four models for
+                                   LOCALES=("UK","DE","JP","IT",
+                                   "FR","ES"). COMPLETE 2026-04-28.
+                                   collect_per_locale_metrics():
+                                   reads Pop at
+                                   pop_data["global"][locale][m]
+                                   (skipping pop_data["session"]
+                                   and pop_data["global"]["Overall"]
+                                   layers we do not need for the
+                                   per-locale view), reads each
+                                   deep model at deep_data[locale][m]
+                                   (top-level locale keys, no
+                                   "global" indirection on deep
+                                   logs), filters to METRICS=
+                                   ("mrr@100","recall@100");
+                                   math.nan fallback per
+                                   {model: {locale: {metric: nan}}}
+                                   triple for any missing log.
+                                   render_per_locale_chart draws
+                                   ncols=len(METRICS) subplots, each
+                                   with 6 locale groups and 4 model
+                                   bars per group; bar offsets =
+                                   (j - (n_models-1)/2) * bar_width
+                                   with bar_width = 0.8 / n_models
+                                   so the group centers exactly on
+                                   each np.arange(len(LOCALES))
+                                   anchor; no bar_label (24 labels
+                                   per subplot would overlap),
+                                   per-subplot legend maps color
+                                   to model. __main__ + argparse:
+                                   --output <path>.
 create_env.sh                    - Environment setup
 run_preprocessing.sbatch         - Slurm job script for preprocessing
 run_training.sbatch              - Parameterized Slurm job script for training
