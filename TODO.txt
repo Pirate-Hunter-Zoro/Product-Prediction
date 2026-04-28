@@ -1201,11 +1201,35 @@ PLOTS FOR REPORT (build after numbers are final; do NOT yak-shave
 plotting infrastructure ahead of results -- exception granted
 2026-04-27 to build infrastructure NOW with deferred numbers,
 plug results JSON in when ablations finish):
-[ ] Model-comparison bar chart. X-axis: Popularity, GRU4Rec, NARM,
+[ ] Model-comparison bar chart -- INFRASTRUCTURE IN PROGRESS
+    (started 2026-04-27). X-axis: Popularity, GRU4Rec, NARM,
     Novel. Y-axis: MRR@100 (and twin-axis or second chart for
     Recall@100). Mirrors paper Table 3 visually -- paper itself
     uses tables, not charts, so this is our contribution to
     presentation.
+    Status as of 2026-04-27:
+      * scripts/plot_utils.py created with two slurm-log JSON
+        parsers shared across all plot scripts. load_eval_log
+        parses an evaluate.py log (one JSON block) by slicing
+        first-{ to last-} and calling json.loads, returns
+        Dict[str, Any]. load_pop_log splits a pop_baseline.py
+        log on the literal "Session Metrics:" marker (two JSON
+        blocks), runs the same first-{ to last-} slice on each
+        half, returns {"global": {...}, "session": {...}}.
+      * scripts/plot_model_comparison.py created with module
+        constants (SLURM_LOGS_DIR=Path("slurm_logs"),
+        MODELS=["GRU4Rec","NARM","NovelModel"], DEEP_MODEL_LOGS
+        f-string-built from MODELS, POP_LOG_FILENAME, METRICS=
+        ("mrr@100","recall@100")) and the collect_overall_metrics
+        function: reads Pop "global" mode + each deep model's
+        "Overall" scope, filters to METRICS, falls back to
+        math.nan for any missing log file (NovelModel log will
+        be missing until full training completes -- TODO line
+        1181, preprocess job 1873177 -> training).
+      * Pending: render_chart(results, output_path) function
+        (two side-by-side subplots, one per metric, with
+        ax.bar_label so Pop's ~1e-4 MRR is readable next to
+        GRU4Rec's ~0.15) and __main__ argparse glue (--output).
 [ ] Per-locale grouped bar chart. X-axis: UK, DE, JP, ES, FR, IT
     (and optionally Overall). Bars grouped by model. Shows where
     the novel method helps vs baselines across locales.
@@ -1332,6 +1356,38 @@ scripts/novel_model.py           - NovelModel(SequentialRecommender)
                                    num_heads, hidden_size, loss_type.
                                    Smoke-tested end-to-end on the
                                    3000-row split 2026-04-27.
+scripts/plot_utils.py            - Slurm-log JSON parsers shared
+                                   across plot scripts. Two
+                                   functions, no CLI.
+                                   load_eval_log parses an
+                                   evaluate.py log (single JSON
+                                   block) by slicing first-{ to
+                                   last-} and calling json.loads;
+                                   returns Dict[str, Any].
+                                   load_pop_log parses a
+                                   pop_baseline.py log (two blocks
+                                   separated by the literal
+                                   "Session Metrics:" marker line)
+                                   by splitting on that marker
+                                   then running the same first-{
+                                   to last-} slice on each half;
+                                   returns {"global": {...},
+                                   "session": {...}}.
+scripts/plot_model_comparison.py - Bar chart over Popularity,
+                                   GRU4Rec, NARM, NovelModel for
+                                   the "Overall" (six-locale
+                                   union) scope. IN PROGRESS as
+                                   of 2026-04-27:
+                                   collect_overall_metrics()
+                                   implemented (Pop loaded via
+                                   load_pop_log "global" mode;
+                                   deep baselines via
+                                   load_eval_log "Overall" key;
+                                   filtered to METRICS=
+                                   ("mrr@100","recall@100");
+                                   math.nan placeholder for any
+                                   missing log file). render_chart
+                                   and __main__ argparse pending.
 create_env.sh                    - Environment setup
 run_preprocessing.sbatch         - Slurm job script for preprocessing
 run_training.sbatch              - Parameterized Slurm job script for training
