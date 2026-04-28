@@ -1336,6 +1336,51 @@ DELIVERABLES:
 [ ] Prepare presentation slides -- DUE THURSDAY 2026-04-30.
     Coding phase declared complete 2026-04-28; pivot to slide
     content now.
+    Toolchain setup COMPLETE 2026-04-28:
+      * TinyTeX installed under ~/.TinyTeX (no sudo); binaries
+        symlinked into ~/.local/bin (already on PATH). pdflatex,
+        lualatex, latexmk, tlmgr all resolve.
+      * latexmk is broken on this RHEL 9 box because the system
+        Perl is missing Time::HiRes (perl-Time-HiRes RPM not
+        installed, no sudo to fix). Worked around by skipping
+        latexmk entirely -- builds use a "lualatex x2" recipe.
+      * tlmgr packages installed: beamer, pgf, etoolbox,
+        translator, hyperref, beamertheme-metropolis, fira,
+        fontspec, pgfopts.
+      * Repo scaffolding: slides/main.tex (metropolis theme,
+        progressbar=none to dodge the calc-overflow bug at
+        \section on first pass; title metadata wired to
+        "The University of Tulsa"; placeholder frames for
+        Task/Dataset, Method, Results). slides/main.pdf builds
+        clean as 8 pages.
+      * .vscode/settings.json updated with LaTeX Workshop
+        config: lualatex absolute path, "lualatex x2" default
+        recipe, autoBuild on save, autoClean glob method (not
+        latexmk -c, which would trigger the Time::HiRes
+        failure), badbox+warning popup suppression, PDF
+        opens in a side tab. SAME CONFIG block was also
+        copied into ~/Digital-Twins/.vscode/settings.json
+        for that project's eventual slides/paper work.
+      * .gitignore updated by user to exclude slide build
+        artifacts.
+      * README updated 2026-04-28: slides/ added to Project
+        Structure; new "Slides (LaTeX / Beamer)" subsection
+        under Usage covers TinyTeX install, tlmgr packages,
+        the latexmk/Time::HiRes workaround, the metropolis
+        progressbar bug, command-line build, and VS Code
+        LaTeX Workshop setup (Remote-SSH gotcha included);
+        Known Issues gained two entries for the latexmk and
+        metropolis bugs.
+    REMAINING WORK = content only:
+      * Replace the three placeholder frames with real slides
+        on Task+Dataset, Method (NovelModel cross-attention
+        architecture), and Results (use plots/ figures +
+        slurm_logs/ JSON metrics).
+      * Decide whether to add Related Work, Ablation, and
+        Limitations sections given the 10-15 min talk window.
+      * Confirm NovelModel evaluation log lands before the
+        Results frame is finalized -- the two plot scripts
+        currently render NovelModel as NaN bars.
 [ ] Write up the project report (LaTeX or Markdown) -- due later
     than the slides; specific date not given. Reuse the figures
     rendered by plot_model_comparison.py / plot_per_locale.py

@@ -68,6 +68,7 @@ data/
 saved/                     Model checkpoints
 slurm_logs/                Slurm stdout/stderr logs
 plots/                     Rendered figures (`model_comparison.png`, `per_locale.png`); gitignored
+slides/                    Beamer presentation source. `main.tex` is the root file (metropolis theme, progressbar disabled to dodge a known calc-overflow bug at `\section` on first compile). Build artifacts (`.aux`, `.log`, `.nav`, `.snm`, `.toc`, `.out`, `.synctex.gz`) are gitignored; `main.pdf` may or may not be tracked depending on local preference.
 ```
 
 ## Environment Setup
@@ -217,6 +218,73 @@ python scripts/plot_per_locale.py        --output plots/per_locale.png
 
 `plot_model_comparison.py` produces a four-bar-per-subplot chart (Popularity, GRU4Rec, NARM, NovelModel) for the "Overall" (six-locale union) scope, with one subplot per metric in `METRICS=("mrr@100","recall@100")`; bar labels (`%.4f`) are kept so Pop's ~1e-4 MRR remains readable next to deep-model bars near 0.15. `plot_per_locale.py` produces the same four models grouped per locale (`UK, DE, JP, IT, FR, ES`) with one subplot per metric; bar labels are dropped at this density (24 bars per subplot) and a per-subplot legend maps color to model. Re-run either script after a new evaluation log lands and the chart refreshes in place.
 
+### Slides (LaTeX / Beamer)
+
+Slides live in `slides/main.tex` (Beamer + metropolis theme). The toolchain is fully local — no Overleaf — and was set up on the cluster compute node so it works inside the same VS Code Remote-SSH session used for everything else.
+
+#### One-time toolchain install
+
+The cluster has no `pdflatex` / `lualatex` / `latexmk` system-wide and no TeX Live module. Install [TinyTeX](https://yihui.org/tinytex/) into your home directory (no sudo required):
+
+```bash
+wget -qO- "https://yihui.org/tinytex/install-bin-unix.sh" | sh
+```
+
+This unpacks into `~/.TinyTeX/` and symlinks the binaries into `~/.local/bin/` (which is already on `PATH` for this user). Then pull the Beamer + metropolis package stack:
+
+```bash
+tlmgr install beamer pgf etoolbox translator hyperref \
+              fira fontspec pgfopts \
+              beamertheme-metropolis
+```
+
+Note the canonical CTAN name is `beamertheme-metropolis`, not `metropolis`. `tlmgr install metropolis` will fail with "package not present in repository".
+
+#### Known toolchain quirk: broken `latexmk`
+
+`latexmk` ships with TinyTeX but is a Perl script that imports `Time::HiRes`. RHEL 9 strips `Time::HiRes` into the `perl-Time-HiRes` RPM, which is not installed on the compute nodes — so `latexmk` errors out with:
+
+```
+Can't locate Time/HiRes.pm in @INC ... at /home/<user>/.local/bin/latexmk line 121.
+```
+
+Without sudo this RPM cannot be installed. The workaround is to skip `latexmk` entirely: build with `lualatex` directly (run twice for cross-references / TOC), and configure VS Code's LaTeX Workshop to use a `lualatex`-only recipe with glob-based cleanup (LaTeX Workshop's default cleaner also calls `latexmk -c`, which would re-trigger the same error).
+
+#### Known theme quirk: metropolis `progressbar` arithmetic overflow
+
+The metropolis theme's section progress bar divides by the total section count, which is undefined on the first compile (before the `.aux` file exists). This produces a hard `Arithmetic overflow` error at the first `\section{}` line and prevents any PDF output. `slides/main.tex` disables the progress bar globally with:
+
+```latex
+\metroset{progressbar=none}
+```
+
+Removing this line will resurrect the error.
+
+#### Building from the command line
+
+```bash
+cd slides
+lualatex -interaction=nonstopmode -halt-on-error main.tex   # 1st pass: builds .aux, .toc, .nav
+lualatex -interaction=nonstopmode -halt-on-error main.tex   # 2nd pass: resolves cross-refs, finalizes TOC
+```
+
+Output: `slides/main.pdf`. The first pass also triggers `luaotfload` to build a font cache (`~/.TinyTeX/.../luatex-cache/`) on the very first invocation; subsequent compiles are sub-second.
+
+#### VS Code setup (LaTeX Workshop)
+
+Install the **LaTeX Workshop** extension by **James Yu** (`Cmd+Shift+X` → search → install). Because this repo is opened over Remote-SSH, the extension must be installed on the **remote host**, not locally — VS Code will offer an "Install in SSH: `<hostname>`" button after the local install. Confirm the Extensions panel lists it under "SSH: `<hostname>`" rather than "Local".
+
+The repo's `.vscode/settings.json` already contains the working LaTeX Workshop config:
+
+- A single `lualatex` tool entry pinned to the absolute path `~/.local/bin/lualatex` (so VS Code's PATH cannot break it).
+- Two recipes: `lualatex x2` (default, runs lualatex twice for cross-refs) and `lualatex x1` (single-pass, faster for content-only edits with no TOC changes).
+- `autoBuild.run = "onSave"` — `Cmd+S` triggers compile.
+- `autoClean.run = "onBuilt"` with `clean.method = "glob"` — sweeps `.aux`/`.log`/`.nav`/`.snm`/`.toc`/`.out`/`.synctex.gz`/etc. after each build using VS Code's own glob deleter, NOT `latexmk -c` (which would hit the Time::HiRes error).
+- `view.pdf.viewer = "tab"` — PDF opens in a side editor tab via `Cmd+Shift+P` → "LaTeX Workshop: View LaTeX PDF" → "in a new tab".
+- `message.warning.show: false`, `message.badbox.show: false` — silence the "Overfull \vbox" badbox notifications and editor squiggles that metropolis emits at `\maketitle` (the title page slightly overflows by ~5mm, harmless, PDF renders correctly).
+
+After installing the extension, reload the VS Code window (`Cmd+Shift+P` → "Developer: Reload Window") so the settings take effect, then `Cmd+S` on `main.tex`. Useful default shortcuts on Mac: `Cmd+Option+B` (build), `Cmd+Option+V` (view PDF), `Cmd+Option+J` (SyncTeX cursor → PDF), `Cmd+click` in the PDF (SyncTeX PDF → source).
+
 ## Models
 
 | Model   | Type     | Status    |
@@ -234,3 +302,5 @@ python scripts/plot_per_locale.py        --output plots/per_locale.png
 - **conda activation on the cluster** requires `module purge && module load Anaconda3/2025.06-0` before any `conda activate` call. Without this, a different conda installation may be used, pointing to a different environment with the same name.
 - **`~/.local` site-packages interference:** The cluster's shared filesystem causes pip to fall back to `--user` installs. All pip commands in `create_env.sh` use `--no-user`, and `run_training.sbatch` sets `PYTHONNOUSERSITE=1` at runtime.
 - **Full dataset requires GPU cluster.** The 3.6M sessions and 1.4M items will exhaust memory on a laptop. Use `--nrows` for local testing.
+- **Broken `latexmk` on RHEL 9 cluster nodes (slides toolchain):** The system Perl 5.32 ships without the `Time::HiRes` core module (RHEL splits it into the `perl-Time-HiRes` RPM, which is not installed and cannot be added without sudo). `latexmk` imports `Time::HiRes` at line 121 and dies. The slides toolchain skips `latexmk` entirely — builds use a `lualatex x2` recipe directly, and VS Code's LaTeX Workshop is configured with `clean.method = "glob"` so its post-build cleanup also avoids `latexmk -c`. See the "Slides (LaTeX / Beamer)" section above for the full setup.
+- **metropolis Beamer theme `Arithmetic overflow` at `\section`:** The theme's section progress bar divides by an undefined section count on the first compile. `slides/main.tex` disables it with `\metroset{progressbar=none}`. Removing that line resurrects the error and produces no PDF output.

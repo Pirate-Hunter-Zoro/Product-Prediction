@@ -10,3 +10,10 @@ log*/
 saved/
 slurm_logs/
 plots/
+*.aux
+*.log
+*.nav
+*.snm
+*.toc
+*.out
+*.synctex.gz
