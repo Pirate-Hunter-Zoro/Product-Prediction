@@ -1,0 +1,279 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{fontspec}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{hyperref}
+
+\setmainfont{Libertinus Serif}[Ligatures=TeX]
+\setsansfont{Libertinus Sans}[Ligatures=TeX]
+\setmonofont{Inconsolatazi4}[
+  Extension   = .otf,
+  UprightFont = *-Regular,
+  BoldFont    = *-Bold,
+  Scale       = 0.95
+]
+
+\definecolor{tuBlue}{HTML}{1F4E79}
+\definecolor{tuGold}{HTML}{C8A951}
+\definecolor{softGray}{HTML}{F4F6F8}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=tuBlue,
+  citecolor=tuBlue,
+  urlcolor=tuBlue
+}
+
+\graphicspath{{../plots/}}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.65em}
+\renewcommand{\arraystretch}{1.15}
+
+\newcommand{\metric}[1]{\textsc{#1}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\best}[1]{\textbf{#1}}
+
+\title{\textbf{Amazon-M2 Next Product Recommendation}\\
+\large Session-Based Recommendation with Cross-Attention over Item Attributes}
+\author{Mikey Ferguson\\The University of Tulsa}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This project studies session-based next product recommendation on the Amazon-M2 multilingual shopping dataset. Given a short sequence of previously interacted products, the model must rank the held-out next product over a catalog of roughly 1.4 million items. The implementation builds a reproducible RecBole pipeline with a seeded 80/10/10 split, per-locale evaluation, three existing-method baselines, and a custom \code{SequentialRecommender} called NovelModel. NovelModel keeps the item-id sequence encoder used by standard sequential recommenders, but adds multi-head cross-attention over a per-item attribute bag containing title, brand, color, and price-bin features. On the all-six-locale test set, NovelModel achieves the best \metric{MRR@100} and \metric{NDCG@100} among the implemented models, while GRU4Rec keeps the best \metric{Recall@100}.
+\end{abstract}
+
+\section{Introduction}
+
+Session-based recommendation predicts the next item a user will interact with using only the current session history. This setting is useful when long-term user profiles are unavailable or unreliable, but it is also difficult: the histories are short, the item vocabulary is huge, and the model must rank a single held-out target among many plausible products.
+
+Amazon-M2 is a fitting benchmark because it combines scale, multiple locales, multiple languages, and rich product metadata \cite{jin2023amazonm2}. The final project requirement asked for a graduate-level novel method compared with existing methods. This work implements three baselines--Popularity, GRU4Rec, and NARM--plus a new attribute-aware sequence model.
+
+The main contributions are:
+\begin{itemize}
+  \item A full preprocessing, training, evaluation, and plotting pipeline for Amazon-M2 next-product recommendation using RecBole.
+  \item A per-locale evaluation path that reports UK, DE, JP, IT, FR, ES, a six-locale overall result, and a UK/DE/JP weighted result for closer comparison to the Amazon-M2 paper.
+  \item A custom cross-attention model that fuses item-id sequence information with title, brand, color, and price-bin attributes.
+  \item An empirical comparison showing that the proposed model improves rank-sensitive metrics, while the plain GRU sequence model retrieves more targets in the top 100.
+\end{itemize}
+
+\section{Dataset and Task}
+
+\subsection{Amazon-M2}
+
+Amazon-M2 contains multilingual, multi-locale shopping sessions from six locales. Each session is a chronological list of product IDs, and each product has associated metadata such as title, brand, color, and price. The raw training file used in this project contains 3,606,249 sessions. Locale counts are highly imbalanced, with UK, DE, and JP much larger than IT, FR, and ES.
+
+\begin{table}[t]
+\centering
+\caption{Raw session counts by locale in the project data.}
+\label{tab:locale-counts}
+\begin{tabular}{@{}lr@{}}
+\toprule
+Locale & Sessions \\
+\midrule
+UK & 1,182,181 \\
+DE & 1,111,416 \\
+JP & 979,119 \\
+IT & 126,925 \\
+FR & 117,561 \\
+ES & 89,047 \\
+\midrule
+Total & 3,606,249 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Sessions are short: the mean length is approximately 4.24 items, the median is 3, and the maximum observed length is 474. This means the model usually has very little context before it must rank over the full product vocabulary.
+
+\subsection{Prediction Task}
+
+Each example is converted to a RecBole sequential interaction row:
+\begin{itemize}
+  \item \code{session_id:token}: a row-level session identifier.
+  \item \code{item_id_list:token_seq}: the previous products in the session.
+  \item \code{item_id:token}: the held-out next product.
+\end{itemize}
+
+The preprocessing script shuffles sessions with \code{SEED=42} and writes an 80/10/10 train, validation, and test split. Evaluation uses full-sort ranking over the item vocabulary, not a small candidate set.
+
+\section{Methods}
+
+\subsection{Baselines}
+
+\textbf{Popularity.} The first baseline ranks the globally most frequent items from the training set. The counter includes both products appearing in session histories and products appearing as training targets. A second session-aware popularity variant was also implemented, but it underperformed global popularity because the held-out next item never appears in its own history on this split. The report table uses the global Popularity result.
+
+\textbf{GRU4Rec.} GRU4Rec is a recurrent sequence model for session-based recommendation. It embeds the item sequence, passes the sequence through a GRU, and scores candidate next items from the final session state.
+
+\textbf{NARM.} NARM adds an attention mechanism to session recommendation. It combines a global sequential representation with an attention-weighted local representation over the session.
+
+\subsection{Attribute Artifacts}
+
+The proposed model uses product metadata from \code{products_train.csv}. The attribute-building step filters the catalog to items that occur in the RecBole vocabulary and writes \code{item_attributes.parquet}. The resulting artifact has 1,393,956 item rows and no catalog gap: every item referenced by the session data has a product metadata row.
+
+Text attributes are encoded with \code{paraphrase-multilingual-MiniLM-L12-v2}, producing 384-dimensional normalized embeddings for title, brand, and color. The same multilingual encoder is used for all three text fields so they enter the model in a shared semantic space.
+
+Price is handled separately. Raw prices include extreme outliers, including a top quantile boundary above \$40,000,000. Direct numeric projection would expose the model to those magnitudes. Instead, the project computes 32 quantile bins, assigns every catalog item to a bin, and learns a price-bin embedding. This keeps outlier magnitude from destabilizing training.
+
+\subsection{NovelModel}
+
+NovelModel is a custom RecBole \code{SequentialRecommender}. It starts with a GRU sequence encoder, then lets the final session state attend to the attribute vectors belonging to every item in the input session.
+
+For the sequence side, each item ID is mapped to a learned item embedding. The embedded item sequence is passed through a GRU, and the last real GRU state becomes the session vector.
+
+For the attribute side, each product contributes four possible attribute vectors:
+\begin{itemize}
+  \item The title text is sent through the multilingual text embedder to produce a title vector.
+  \item The brand text is sent through the same multilingual text embedder to produce a brand vector.
+  \item The color text is sent through the same multilingual text embedder to produce a color vector.
+  \item The price is converted to a quantile bin, and that bin ID is mapped to a learned price-bin embedding.
+\end{itemize}
+
+The title, brand, color, and price-bin vectors are each brought into the model hidden size. For every item in the input session, those attribute vectors are stacked into one session-level attribute bag. The final GRU session vector is the attention query, and the attribute bag supplies the keys and values:
+\[
+  c_s = \mathrm{MultiHeadAttention}(q_s, B_s, B_s), \qquad
+  z_s = q_s + c_s.
+\]
+
+The final score for every possible next item is a dot product against the same learned item embedding table used by the input side:
+\[
+  \mathrm{score}(s) = z_s E_{\mathrm{item}}^\top.
+\]
+
+Training uses cross-entropy over the full item vocabulary. The configured NovelModel run used hidden size 128, one GRU layer, dropout 0.3, four attention heads, 32 price bins, and the full title+brand+color+price attribute set.
+
+\section{Experimental Setup}
+
+The implementation uses RecBole 1.2.0 with PyTorch. Models train with batch size 256, evaluate with batch size 128, and are scored by full-sort ranking at \(K=100\).
+
+Metrics are computed at \(K=100\). Since each test session has one held-out target item, let \(r_s\) be that target's rank for session \(s\). A session contributes zero if \(r_s > 100\):
+\[
+  \mathrm{MRR@100}
+  = \frac{1}{N}\sum_{s=1}^{N}
+    \frac{1}{r_s}\mathbb{1}[r_s \le 100],
+\]
+\[
+  \mathrm{Recall@100}
+  = \frac{1}{N}\sum_{s=1}^{N}
+    \mathbb{1}[r_s \le 100],
+\]
+\[
+  \mathrm{NDCG@100}
+  = \frac{1}{N}\sum_{s=1}^{N}
+    \frac{1}{\log_2(r_s+1)}\mathbb{1}[r_s \le 100].
+\]
+
+\metric{Recall@100} is equivalent to HitRate@100 in this single-positive setting. \metric{MRR@100} is stricter because it heavily rewards placing the target near rank 1. \metric{NDCG@100} is also rank-sensitive, but its discount is gentler than MRR.
+
+The Amazon-M2 paper reports its next-product recommendation results primarily on UK, DE, and JP. This project evaluates all six locales, so all-six ``Overall'' numbers are not the same object as the paper's UK/DE/JP ``Overall.'' To reduce ambiguity, both scopes are labeled when reported.
+
+\section{Results}
+
+\subsection{Overall Results}
+
+Table~\ref{tab:overall-results} reports the main test-set results. NovelModel improves the strict rank-sensitive metrics: it is best on \metric{MRR@100} and \metric{NDCG@100}. GRU4Rec remains best on \metric{Recall@100}, meaning it retrieves more correct items into the top 100 but ranks them lower on average.
+
+\begin{table}[t]
+\centering
+\caption{Overall test results. The all-six scope is the primary project result. The UK/DE/JP weighted scope is included because the Amazon-M2 paper's next-product recommendation overall result uses those three large locales.}
+\label{tab:overall-results}
+\small
+\begin{tabular}{@{}lccc@{\hspace{1.2em}}ccc@{}}
+\toprule
+& \multicolumn{3}{c}{All six locales} & \multicolumn{3}{c}{UK/DE/JP weighted} \\
+\cmidrule(r){2-4}\cmidrule(l){5-7}
+Model & \metric{MRR} & \metric{Recall} & \metric{NDCG} & \metric{MRR} & \metric{Recall} & \metric{NDCG} \\
+\midrule
+Popularity & 0.0001 & 0.0018 & 0.0004 & 0.0001 & 0.0013 & 0.0003 \\
+NARM       & 0.1522 & 0.3637 & 0.1951 & 0.1470 & 0.3493 & 0.1880 \\
+GRU4Rec    & 0.1609 & \best{0.3852} & 0.2061 & 0.1551 & \best{0.3702} & 0.1984 \\
+NovelModel & \best{0.1863} & 0.3567 & \best{0.2216} & \best{0.1799} & 0.3433 & \best{0.2138} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The Popularity result is a useful negative result. Under this project's seeded split and full 1.4M-item ranking setup, the globally most common training items rarely match held-out test targets. The gap from the Amazon-M2 paper's Popularity result makes it clear that the paper used a different popularity implementation or evaluation protocol.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\linewidth]{model_comparison.png}
+\caption{Overall \metric{MRR@100} and \metric{Recall@100} for the implemented models.}
+\label{fig:model-comparison}
+\end{figure}
+
+\subsection{Per-Locale Behavior}
+
+Table~\ref{tab:per-locale-mrr} shows \metric{MRR@100} by locale. All neural models score higher on the smaller locales than on UK and DE. This is one reason the all-six result and the UK/DE/JP result should not be mixed.
+
+\begin{table}[t]
+\centering
+\caption{\metric{MRR@100} by locale.}
+\label{tab:per-locale-mrr}
+\small
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+Model & UK & DE & JP & IT & FR & ES \\
+\midrule
+Popularity & 0.0001 & 0.0001 & 0.0001 & 0.0004 & 0.0007 & 0.0006 \\
+NARM       & 0.1404 & 0.1324 & 0.1715 & 0.1922 & 0.2167 & 0.2002 \\
+GRU4Rec    & 0.1466 & 0.1404 & 0.1819 & 0.2080 & 0.2301 & 0.2173 \\
+NovelModel & \best{0.1688} & \best{0.1630} & \best{0.2126} & \best{0.2389} & \best{0.2615} & \best{0.2447} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.98\linewidth]{per_locale.png}
+\caption{Per-locale \metric{MRR@100} and \metric{Recall@100}. NovelModel leads MRR across locales, while GRU4Rec generally has stronger Recall.}
+\label{fig:per-locale}
+\end{figure}
+
+\subsection{Comparison to the Amazon-M2 Paper}
+
+The Amazon-M2 paper reports next-product recommendation baselines on UK, DE, and JP, not all six locales. In that setting, the paper's table reports Popularity at \metric{MRR@100}=0.2426 and \metric{Recall@100}=0.4243; GRU4Rec++ at 0.1757 and 0.3808; and NARM at 0.1908 and 0.4180 \cite{jin2023amazonm2}. Appendix C reports \metric{NDCG@100}, with GRU4Rec++ at 0.2374 and NARM at 0.2452.
+
+The implemented GRU4Rec is close to the paper's GRU4Rec++ recall on the UK/DE/JP weighted scope, but lower on MRR and NDCG. That is expected: GRU4Rec++ is an enhanced version of the model and the paper tuned hyperparameters across a larger search. NovelModel's UK/DE/JP weighted MRR of 0.1799 is higher than this project's GRU4Rec and NARM runs, and slightly higher than the paper's GRU4Rec++ MRR, but it is still below the paper's NARM MRR.
+
+The more important comparison is conceptual. The Amazon-M2 paper reports that directly injecting multilingual title embeddings into GRU4Rec++ and SRGNN hurt performance in one of its ablation studies, concluding that effective use of textual features remains open \cite{jin2023amazonm2}. NovelModel is designed around that failure mode: it does not overwrite or initialize the item-id embedding table with text. Instead, item IDs and attributes remain separate streams, and cross-attention lets the session state decide which attributes are useful.
+
+\section{Analysis}
+
+The results show a clear tradeoff. NovelModel improves MRR and NDCG, which means it is better at pushing its successful hits toward the top of the ranked list. GRU4Rec improves Recall, which means it places the true item somewhere in the top 100 more often.
+
+This distinction matters for recommender systems. A product at rank 1 or rank 5 is much more likely to be seen than a product at rank 80. NovelModel is therefore better under metrics that care about early rank quality. However, if the downstream interface can display or re-rank a larger candidate pool, GRU4Rec's stronger recall could be valuable.
+
+The per-locale results also show that model performance is not uniform across markets. UK and DE are the hardest locales in this run. FR, ES, and IT score higher despite having fewer sessions. This can happen when the smaller-locale item distributions are narrower or easier to rank, and it reinforces why locale-aware reporting is necessary.
+
+\section{Limitations and Future Work}
+
+The largest limitation is that NovelModel was trained as a single configuration rather than after a broad hyperparameter search. The training run was stopped at epoch 38 after validation MRR had plateaued, with best validation \metric{MRR@100}=0.1873. More training or tuning may change the MRR/Recall tradeoff.
+
+The slot-toggle ablation infrastructure is implemented, but the final report results use only the full title+brand+color+price configuration. The most direct next experiment is title-only, title+brand, title+brand+price, and full-slot comparison. That would test whether all attributes help or whether one field dominates.
+
+The current architecture also uses a GRU backbone. A natural extension is to keep the same attribute-bag cross-attention block but replace the session encoder with a stronger high-recall architecture such as CORE or MGS. That would test whether the proposed fusion mechanism can keep its rank-quality gains while improving Recall.
+
+Finally, the Popularity mismatch with the paper remains unresolved. The implemented baseline is correct for this project's split and full-sort setup, but it does not reproduce the paper's Popularity result. The most likely explanation is that the paper used a different popularity implementation or evaluation protocol.
+
+\section{Conclusion}
+
+This project delivers a full Amazon-M2 session recommendation pipeline with three baselines and a custom novel model. NovelModel separates item-id sequence modeling from product-attribute modeling and uses cross-attention to fuse the two. On the all-six-locale test set, it achieves the best \metric{MRR@100} and \metric{NDCG@100} among the implemented models. The result supports the original motivation: product attributes can help, but they need to be fused deliberately rather than forced into the item embedding table.
+
+\begin{thebibliography}{1}
+
+\bibitem{jin2023amazonm2}
+Wei Jin, Haitao Mao, Zheng Li, Haoming Jiang, Chen Luo, Hongzhi Wen, Haoyu Han, Hanqing Lu, Zhengyang Wang, Ruirui Li, Zhen Li, Monica Cheng, Rahul Goutam, Haiyang Zhang, Karthik Subbian, Suhang Wang, Yizhou Sun, Jiliang Tang, Bing Yin, and Xianfeng Tang.
+\newblock Amazon-M2: A Multilingual Multi-locale Shopping Session Dataset for Recommendation and Text Generation.
+\newblock \emph{NeurIPS Datasets and Benchmarks}, 2023.
+
+\end{thebibliography}
+
+\end{document}
