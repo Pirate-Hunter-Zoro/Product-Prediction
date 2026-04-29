@@ -51,7 +51,7 @@
 \usepackage{array}
 \usepackage{tikz}
 \usetikzlibrary{positioning,arrows.meta,fit}
-\graphicspath{{../plots/}}
+\graphicspath{{../plots/}{../data/}}
 
 \setbeamertemplate{title separator}{%
   \begin{tikzpicture}
@@ -140,18 +140,34 @@
   \end{alertblock}
 \end{frame}
 
-\begin{frame}{Why This Is Not Just GRU4Rec}
-  \begin{itemize}
-    \item The Amazon-M2 paper reports that naive title-embedding fusion often hurts sequential models.
-    \item The same paper calls effective textual-feature use an open problem.
-    \item Popularity is protocol-sensitive: on this seeded split, next items are disjoint from their session histories.
-    \item Small locales score differently from large locales, so one headline number hides important behavior.
-  \end{itemize}
+\begin{frame}{Session Length Distribution}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.6\textwidth}
+      \begin{center}
+        \includegraphics[width=\linewidth,height=0.7\textheight,keepaspectratio]{session_lengths.png}
+      \end{center}
 
-  \vspace{0.7em}
-  \begin{block}{Project angle}
-    Keep strong sequential baselines, then test whether a more structured attribute-fusion path can use metadata without drowning the sequence signal.
-  \end{block}
+    \column{0.36\textwidth}
+      \textbf{Items per session}\\[0.2em]
+      \scriptsize
+      \begin{tabular}{lr}
+        \toprule
+        Statistic & Value \\
+        \midrule
+        Count   & 3{,}606{,}249 \\
+        Mean    & 4.24 \\
+        Std.\ dev. & 3.55 \\
+        Min     & 2 \\
+        25\%    & 2 \\
+        Median  & 3 \\
+        75\%    & 5 \\
+        Max     & 474 \\
+        \bottomrule
+      \end{tabular}
+
+      \vspace{0.5em}
+      \footnotesize Heavy right skew: most sessions are 2--3 items; the tail stretches into the hundreds.
+  \end{columns}
 \end{frame}
 
 \section{Pipeline}
@@ -215,23 +231,73 @@
   \footnotesize Popularity is reported honestly as a negative baseline on this split; its paper-level performance is not reproduced under this evaluation protocol.
 \end{frame}
 
+\begin{frame}[fragile]{Baseline Instantiation in RecBole}
+\vspace{-0.4em}
+\begin{columns}[T,onlytextwidth]
+  \column{0.50\textwidth}
+    \textbf{\code{scripts/train.py}}\\[0.3em]
+    \scriptsize
+\begin{verbatim}
+from recbole.quick_start import run_recbole
+
+run_recbole(
+    model='GRU4Rec',   # or 'NARM'
+    dataset='amazon_m2',
+    config_file_list=['scripts/config.yaml'],
+)
+\end{verbatim}
+
+  \column{0.46\textwidth}
+    \textbf{\code{scripts/config.yaml} (key entries)}\\[0.3em]
+    \scriptsize
+\begin{verbatim}
+USER_ID_FIELD: session_id
+ITEM_ID_FIELD: item_id
+benchmark_filename: [train, valid, test]
+alias_of_item_id: [item_id_list]
+filter_inter_by_user_or_item: False
+metrics: [MRR, Recall, NDCG]
+topk: [100]
+valid_metric: MRR@100
+\end{verbatim}
+\end{columns}
+
+\vspace{0.4em}
+\footnotesize GRU4Rec and NARM need no model code --- swapping baselines is a one-line change to the \code{model=} string. Pop is the one exception (\code{scripts/pop\_baseline.py}) because RecBole's built-in \code{Pop} is incompatible with our sequential config; in hindsight its near-zero numbers match the broken RecBole version exactly, so the custom code turned out to be unnecessary. The novel method, by contrast, is a custom \code{SequentialRecommender} subclass (next section).
+\end{frame}
+
 \section{Novel Method}
 
 \begin{frame}{Motivation}
-  \begin{block}{Observation from prior work}
-    Amazon-M2 experiments show that simply adding multilingual title embeddings can reduce ranking quality.
+  \begin{block}{Amazon-M2 paper, Table 5 (Task 2 ablation, ES/FR/IT supervised)}
+    The authors initialize the item-embedding table with Multilingual Sentence-BERT \emph{title} vectors (variants SRGNNF, GRU4RecF). MRR@100 and Recall@100 drop on every locale tested. Their conclusion: \textit{``how to effectively utilize textual features remains an open question.''}
+
+    \vspace{0.2em}
+    \begin{center}
+    \scriptsize
+    \begin{tabular}{lcc@{\hskip 1.5em}lcc}
+      \toprule
+      Variant & \metric{MRR} & \metric{Recall} & Variant & \metric{MRR} & \metric{Recall} \\
+      \midrule
+      SRGNN              & 0.2640 & 0.5429 & GRU4Rec++         & 0.2564 & 0.5856 \\
+      \quad + title (F)  & 0.2303 & 0.4976 & \quad + title (F) & 0.2427 & 0.5454 \\
+      \bottomrule
+    \end{tabular}
+    \end{center}
   \end{block}
 
-  \vspace{0.4em}
-  \begin{itemize}
-    \item The sequence of item ids is already a strong collaborative signal.
-    \item Metadata is useful only if the model can decide when to attend to it.
-    \item Cross-attention gives the session state a controlled way to query item attributes.
-  \end{itemize}
-
-  \vspace{0.6em}
-  \begin{alertblock}{Novelty}
-    Instead of concatenating metadata to item ids, the model lets the session representation attend over a small per-item attribute bag.
+  \vspace{0.3em}
+  \begin{alertblock}{Our angle --- un-naive feature fusion}
+    \scriptsize
+    \begin{tabular}{@{}p{0.26\linewidth}p{0.33\linewidth}p{0.33\linewidth}@{}}
+      \toprule
+                              & Paper (SRGNNF / GRU4RecF)        & This work (NovelModel) \\
+      \midrule
+      Item-id embedding init  & MiniLM title vectors             & Random (RecBole default) \\
+      How attributes enter    & Baked into the id-embedding row  & Separate per-item bag via cross-attention \\
+      Attribute set           & Title only                       & Title, brand, color, price bin \\
+      \bottomrule
+    \end{tabular}
   \end{alertblock}
 \end{frame}
 
@@ -386,33 +452,39 @@ def forward(self, item_seq, item_seq_len):
 \end{frame}
 
 \begin{frame}{Overall Test Results}
-  \begin{columns}[T,onlytextwidth]
-    \column{0.55\textwidth}
-      \scriptsize
-      \resizebox{\linewidth}{!}{%
-      \begin{tabular}{lccc}
-        \toprule
-        Model & \metric{MRR@100} & \metric{Recall@100} & \metric{NDCG@100} \\
-        \midrule
-        Popularity & 0.0001 & 0.0018 & 0.0004 \\
-        NARM       & 0.1522 & 0.3637 & 0.1951 \\
-        GRU4Rec    & \best{0.1609} & \best{0.3852} & \best{0.2061} \\
-        NovelModel & \multicolumn{3}{c}{full test evaluation pending} \\
-        \bottomrule
-      \end{tabular}%
-      }
+  \begin{center}
+  {\scriptsize\textbf{This work --- all six locales}}\\[0.25em]
+  \scriptsize
+  \begin{tabular}{lccc}
+    \toprule
+    Model & \metric{MRR@100} & \metric{Recall@100} & \metric{NDCG@100} \\
+    \midrule
+    Popularity & 0.0001 & 0.0018 & 0.0004 \\
+    NARM       & 0.1522 & 0.3637 & 0.1951 \\
+    GRU4Rec    & \best{0.1609} & \best{0.3852} & \best{0.2061} \\
+    NovelModel & \multicolumn{3}{c}{full test evaluation pending} \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
 
-    \column{0.4\textwidth}
-      \begin{itemize}
-        \item Headline scope is all six locales.
-        \item GRU4Rec is the strongest completed test run.
-        \item NARM tracks slightly below GRU4Rec.
-        \item Popularity collapses under this split and protocol.
-      \end{itemize}
-  \end{columns}
+  \vspace{0.6em}
+  \begin{center}
+  {\scriptsize\textbf{Amazon-M2 paper, Task 1 --- UK/DE/JP-only Overall}\quad\textit{\footnotesize Table 3 + Appendix C Table 7}}\\[0.25em]
+  \scriptsize
+  \begin{tabular}{lccc@{\hskip 1.6em}lccc}
+    \toprule
+    Model & \metric{MRR} & \metric{Recall} & \metric{NDCG} & Model & \metric{MRR} & \metric{Recall} & \metric{NDCG} \\
+    \midrule
+    Popularity & \best{0.2426} & 0.4243 & 0.2175 & SRGNN & 0.1948 & 0.4032 & 0.2448 \\
+    GRU4Rec++  & 0.1757 & 0.3808 & 0.2374 & CORE  & 0.1609 & \best{0.5591} & \best{0.2839} \\
+    NARM       & 0.1908 & 0.4180 & 0.2452 & MGS   & 0.1907 & 0.5194 & 0.2471 \\
+    STAMP      & 0.2159 & 0.3512 & 0.2379 &       &        &        &        \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
 
-  \vspace{0.7em}
-  \footnotesize NovelModel full-data training was in progress on April 28, 2026; validation had reached about 0.181 MRR@100 by epoch 20.
+  \vspace{0.4em}
+  \footnotesize The two ``Overall'' columns live in different universes: ours unions all six locales, the paper's unions only UK/DE/JP. NovelModel full-data evaluation was still pending on April 28, 2026 (validation MRR@100 \(\approx 0.181\) at epoch 20).
 \end{frame}
 
 \begin{frame}{Model Comparison Plot}
@@ -431,6 +503,43 @@ def forward(self, item_seq, item_seq_len):
 
   \vspace{-0.4em}
   \footnotesize The smaller locales score higher here; that makes the all-six-locale result a different object from the paper's UK/DE/JP-only overall number.
+\end{frame}
+
+\section{Conclusion}
+
+\begin{frame}{Conclusion}
+  \begin{block}{Deliverables}
+    \scriptsize
+    \begin{itemize}\setlength\itemsep{0.15em}
+      \item Reproducible RecBole pipeline: preprocessing $\to$ training $\to$ per-locale evaluation, seeded 80/10/10 split across all six locales.
+      \item GRU4Rec, NARM, and a hand-rolled Popularity baseline; per-locale numbers reach paper-ballpark on the UK/DE/JP weighted row.
+      \item NovelModel: custom \code{SequentialRecommender} subclass with cross-attention over a title / brand / color / price-bin attribute bag, plus a slot-toggle ablation surface wired through \code{train.py}.
+    \end{itemize}
+  \end{block}
+
+  \begin{block}{Limitations}
+    \scriptsize
+    \begin{itemize}\setlength\itemsep{0.3em}
+      \item Our six-locale ``Overall'' $\ne$ the paper's UK/DE/JP-only ``Overall'' --- different universes; both reported with scope labels.
+      \item GRU4Rec sits ${\sim}10\text{--}12\%$ behind paper Table 3 GRU4Rec++ on the UK/DE/JP-weighted row --- seeded-split + augmentation gap, not a bug.
+      \item NovelModel full-test evaluation was still finishing at slide-cut: validation MRR@100 ${\approx}\,0.181$ at epoch 20.
+      \item Paper Popularity (MRR 0.2426) is unreproducible: their protocol's definition of ``most popular'' differs from ours (per-locale vocabulary, leave-one-out test, or the official KDD Cup test set), but the release does not spell out which.
+    \end{itemize}
+  \end{block}
+\end{frame}
+
+\begin{frame}{Future Work}
+  \begin{block}{Where this goes next}
+    \begin{itemize}\setlength\itemsep{0.4em}
+      \item \textbf{Recall-targeted variant.} Swap the GRU for a CORE or MGS encoder under the same attribute-bag fusion --- target their higher Recall@100 (${\sim}0.55$ vs GRU4Rec++'s 0.38).
+      \item \textbf{Slot-toggle ablations.} Title only $\to$ +brand $\to$ +color $\to$ +price. Infrastructure is already wired through \code{train.py --slots} and \code{run\_training.sbatch}; only the cluster jobs remain. Direct comparison to paper Table 5's title-only failure case.
+    \end{itemize}
+  \end{block}
+
+  \vspace{1.5em}
+  \begin{center}
+    {\Huge\textbf{\textcolor{tuBlue}{Questions?}}}
+  \end{center}
 \end{frame}
 
 \end{document}

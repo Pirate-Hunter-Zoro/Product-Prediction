@@ -673,6 +673,70 @@ Plotting + Pop refactor (full chain of work, in dependency order):
     slides deadline.
 
 
+TOMORROW MORNING CHECKLIST (POST-NOVELMODEL TRAINING)
+-----------------------------------------------------
+NovelModel evaluation auto-fires via dependency job 1873375 the
+moment training job 1873374 exits cleanly. The work below verifies
+the auto-eval ran, refreshes plots, and patches the two slides
+that still carry placeholder NovelModel content.
+
+1. Verify NovelModel training completed and eval auto-fired:
+     squeue -u $USER                                       # no NovelModel rows
+     ls -lt saved/NovelModel*.pth | head                   # newest checkpoint
+     ls -l slurm_logs/evaluation_NovelModel_out.txt        # eval log present
+     tail -n 30 slurm_logs/evaluation_NovelModel_out.txt   # peek at JSON
+
+2. If the auto-eval did NOT fire (dependency cancelled, train job
+   exit non-zero, etc.), re-trigger manually:
+     sbatch --job-name=NovelModel run_evaluation.sbatch NovelModel
+   Note the lack of trailing NDCG -- NovelModel was trained with
+   NDCG already in config.yaml, no backfill needed.
+
+3. (OPTIONAL) Re-run the deep baselines and Pop. ONLY needed if a
+   config change has invalidated their prior logs; otherwise skip.
+   The submit_evaluation.sh wrapper strings all four:
+     bash submit_evaluation.sh
+   Equivalent explicit form:
+     sbatch --job-name=GRU4Rec    run_evaluation.sbatch GRU4Rec    NDCG
+     sbatch --job-name=NARM       run_evaluation.sbatch NARM       NDCG
+     sbatch --job-name=NovelModel run_evaluation.sbatch NovelModel
+     sbatch run_pop_evaluation.sbatch
+   GRU4Rec / NARM lines append NDCG because their checkpoints
+   predate NDCG in config.yaml. NovelModel does not. Pop has its
+   own hand-rolled CPU path and ignores the model-name machinery.
+
+4. Refresh the two plots locally (no GPU needed). Both scripts
+   read slurm_logs JSON directly and overwrite plots/*.png:
+     python scripts/plot_model_comparison.py --output plots/model_comparison.png
+     python scripts/plot_per_locale.py        --output plots/per_locale.png
+
+5. Patch slides/main.tex -- two small edits:
+   a) "Overall Test Results" frame (search for the line
+      "NovelModel & \multicolumn{3}{c}{full test evaluation
+      pending}"). Replace with the all-six-locale Overall row:
+        NovelModel & X.XXXX & X.XXXX & X.XXXX \\
+      Pull the three numbers from
+      slurm_logs/evaluation_NovelModel_out.txt at the
+      "Overall" key (NOT "Overall (UK/DE/JP)").
+   b) "Conclusion" frame, Limitations block: delete the third
+      bullet ("NovelModel full-test evaluation was still
+      finishing at slide-cut..."). The other three bullets
+      stay verbatim.
+
+6. Rebuild the deck (lualatex x2 for cross-references):
+     cd slides
+     lualatex -interaction=nonstopmode -halt-on-error main.tex
+     lualatex -interaction=nonstopmode -halt-on-error main.tex
+   Build should remain at 24 PDF pages with only the two
+   pre-existing overflow warnings (title page 13.8pt + Evaluation
+   Metrics 1.13pt).
+
+7. Spot-check slide 13/17 (Overall Test Results) and slide 16/17
+   (Conclusion) -- note the fraction denominator drops by 1 if
+   you also dropped the third Limitations bullet. Confirm the
+   placeholder row is gone and Limitations is now three bullets.
+
+
 REMAINING WORK
 --------------
 NOVEL METHOD:
@@ -1425,16 +1489,15 @@ DELIVERABLES:
         LaTeX Workshop setup (Remote-SSH gotcha included);
         Known Issues gained two entries for the latexmk and
         metropolis bugs.
-    REMAINING WORK = content only:
-      * Replace the three placeholder frames with real slides
-        on Task+Dataset, Method (NovelModel cross-attention
-        architecture), and Results (use plots/ figures +
-        slurm_logs/ JSON metrics).
-      * Decide whether to add Related Work, Ablation, and
-        Limitations sections given the 10-15 min talk window.
-      * Confirm NovelModel evaluation log lands before the
-        Results frame is finalized -- the two plot scripts
-        currently render NovelModel as NaN bars.
+    REMAINING WORK = morning patch only (see TOMORROW MORNING
+    CHECKLIST near top of file). The deck is otherwise
+    camera-ready: 18 numbered slides + 5 section pages + title
+    + outline = 24 PDF pages. The two outstanding slide edits
+    are pulled forward into the morning checklist:
+      * Fill in NovelModel's actual MRR/Recall/NDCG on the
+        Overall Test Results table (currently a placeholder).
+      * Drop the third Limitations bullet about NovelModel's
+        eval being mid-flight.
     Content progress 2026-04-28 (afternoon, refining the
     Codex-generated first draft):
       * Initial Codex draft = 21 frames spanning 5 sections +
@@ -1484,20 +1547,143 @@ DELIVERABLES:
       * Build verified: lualatex x2 produces a 20-page PDF.
         Only Overfull \vbox warning is the 13.8pt cosmetic one
         on \maketitle (already documented as harmless).
-      * OPEN ITEM for next session -- paper citation scope
-        correction. Earlier draft of the Motivation slide
-        leaned on the "naive title fusion hurts" claim from
-        the paper without specifying which table/task. Paper's
-        Table 5 ablation is on Task 2 (domain-shift, supervised
-        on ES/FR/IT only), NOT Task 1. The qualitative finding
-        (every metric drops when adding MiniLM title vectors
-        to GRU4Rec++/SRGNN) holds, but the slide language
-        should say "paper Table 5 ablation on the Task 2
-        small-locale supervised setting" not "the paper's
-        Task 1 results." Verified our GRU4Rec UK/DE/JP-only
-        weighted Overall = 0.1551 MRR / 0.3702 Recall sits
-        ~10-12% behind paper Table 3 GRU4Rec++ = 0.1757 MRR /
-        0.3808 Recall -- normal reproduction drift, not a bug.
+      * OPEN ITEM (resolved 2026-04-28 evening, see Content
+        progress evening notes below) -- paper citation scope
+        correction on the Motivation slide. Now reads "paper
+        Table 5 ablation, Task 2 ES/FR/IT supervised" and
+        cites the exact paper text.
+
+    Content progress 2026-04-28 (evening, post-coding-deadline
+    rebalance and final closing pages):
+      * REMOVED frame: "Why This Is Not Just GRU4Rec". The
+        durable claim (paper-citation about naive title fusion
+        failing) was absorbed into the Motivation frame; the
+        rest (Pop protocol sensitivity, per-locale variance)
+        was already covered by the Limitations and Per-Locale
+        frames.
+      * ADDED frame: "Session Length Distribution" between
+        Dataset Scale and the Pipeline section page. Histogram
+        on the left (data/session_lengths.png, exported from
+        data_investigation.ipynb cell 5), describe() table on
+        the right (count 3.6M, mean 4.24, std 3.55, min 2,
+        median 3, max 474), one-line right-skew caveat.
+        \graphicspath extended to {../plots/}{../data/} so the
+        histogram resolves from data/ alongside the existing
+        plots/ figures.
+      * ADDED frame: "Baseline Instantiation in RecBole" after
+        the Baselines table, just before \section{Novel
+        Method}. [fragile] frame with two side-by-side verbatim
+        columns: scripts/train.py run_recbole(model='GRU4Rec',
+        ...) call on the left, scripts/config.yaml key entries
+        on the right. Footnote acknowledges Pop was hand-rolled
+        as a safety measure but RecBole's broken Pop would have
+        produced the same near-zero numbers, so the custom
+        code was unnecessary in hindsight.
+      * REWROTE Motivation frame in three steps:
+        - First pass: paper Table 5 + exact paper quote ("how
+          to effectively utilize textual features remains an
+          open question") with scope-corrected language ("Task
+          2 ablation, ES/FR/IT supervised") replacing the
+          earlier hand-wavy version.
+        - Second pass: added a 4-row mini-table inside the
+          paper block showing the actual SRGNN/SRGNNF and
+          GRU4Rec++/GRU4RecF MRR/Recall drops on Overall
+          ES/FR/IT. Two-column layout with @{\hskip 1.5em}
+          separator to fit width.
+        - Third pass: replaced the prose paragraph in the
+          "Our angle --- un-naive feature fusion" alertblock
+          with a 3-row contrast table (Item-id embedding init
+          / How attributes enter / Attribute set) showing
+          Paper (SRGNNF/GRU4RecF) vs This work (NovelModel) on
+          each axis. User feedback: inline contrast was
+          clearer than bullets.
+      * EXPANDED Overall Test Results frame (the slide the
+        user previously called slide 14/16, now 13/17 after
+        the Why-frame removal + Session Length addition).
+        Stacked a second compact paper-baseline table below
+        the existing six-locale table: top = "This work ---
+        all six locales" (Pop / NARM / GRU4Rec / NovelModel),
+        bottom = "Amazon-M2 paper, Task 1 --- UK/DE/JP-only
+        Overall" sourced from paper Table 3 + Appendix C
+        Table 7 (Pop / GRU4Rec++ / NARM / STAMP / SRGNN /
+        CORE / MGS in a 2x4 layout). Bold on each metric's
+        column-best.
+      * Paper popularity correction in the Motivation footer
+        wording: changed from "by straightforward
+        concatenation" (factually wrong) to "initialize the
+        item-embedding table with Multilingual Sentence-BERT
+        title vectors (variants SRGNNF, GRU4RecF)". Paper
+        text actually says "we opt for pre-trained
+        Multilingual Sentence BERT to generate additional
+        item embeddings from the item titles" -- mechanism
+        is initialization of the item-id embedding row, not
+        concat onto the GRU output.
+      * ADDED \section{Conclusion} with two frames:
+        - "Conclusion" frame: Deliverables block (3 bullets)
+          + Limitations block (4 short bullets at scriptsize).
+          Limitations bullets after the user trimmed for
+          slide-friendliness:
+            (1) Six-locale "Overall" != paper's UK/DE/JP-only
+                "Overall" -- different universes, both reported
+                with scope labels.
+            (2) GRU4Rec ~10-12% behind paper Table 3 GRU4Rec++
+                on UK/DE/JP-weighted row -- seeded-split +
+                augmentation gap, not a bug.
+            (3) (placeholder, CUT TOMORROW once eval lands)
+                NovelModel full-test evaluation finishing at
+                slide-cut, validation MRR@100 ~ 0.181 at
+                epoch 20.
+            (4) Paper Popularity (MRR 0.2426) is unreproducible
+                -- their protocol's definition of "most
+                popular" differs from ours (per-locale
+                vocabulary, leave-one-out test, or official
+                KDD Cup test set), but the release does not
+                spell out which.
+        - "Future Work" frame: 2 bullets after the user
+          dropped Cross-locale Task 2 as scope creep:
+            (1) Recall-targeted variant. Swap the GRU for a
+                CORE or MGS encoder under the same attribute-
+                bag fusion -- target their higher Recall@100
+                (~0.55 vs GRU4Rec++'s 0.38).
+            (2) Slot-toggle ablations. Title only -> +brand
+                -> +color -> +price; infrastructure already
+                wired through train.py --slots and
+                run_training.sbatch.
+          Followed by a centered tuBlue \Huge \textbf{Questions?}
+          anchored at slide bottom.
+      * Final deck size: 18 numbered content slides + 5
+        section pages + title + outline = 24 PDF pages.
+        Build emits two harmless overflow warnings: title
+        page 13.8pt (already documented) and Evaluation
+        Metrics frame 1.13pt (already documented).
+      * Beamer gotchas captured during this work, recorded
+        for future editors:
+        - Underscores inside \code{...} (which is \texttt)
+          must be escaped: \code{scripts/pop\_baseline.py}
+          works, \code{scripts/pop_baseline.py} errors with
+          "Missing $ inserted" because LaTeX text-mode
+          interprets _ as a math subscript. \verb is the
+          escape-free alternative but does not nest in
+          structures like footnotes.
+        - \begin{columns}[T] inside \begin{block}{...} can
+          cause column content to overlap the block title
+          bar on the first compile. Either drop the [T]
+          option (changes alignment to default) or place
+          the table outside the block, or insert explicit
+          vertical separation. Hit twice during the
+          Motivation rewrite.
+        - On the first compile after frame insertion or
+          deletion, the \inserttotalframenumber denominator
+          shows as a stale value (we saw "7/100" once when
+          the .aux file from the previous build had a
+          different total). A second lualatex pass settles
+          it. Documented under "Slides (LaTeX / Beamer)" in
+          README.
+        - matplotlib's session-length histogram lives in
+          data/ rather than plots/ because the user saved
+          it from the notebook before the plots/ convention
+          was set. Rather than move the file, \graphicspath
+          was extended to include both directories.
 [ ] Write up the project report (LaTeX or Markdown) -- due later
     than the slides; specific date not given. Reuse the figures
     rendered by plot_model_comparison.py / plot_per_locale.py
