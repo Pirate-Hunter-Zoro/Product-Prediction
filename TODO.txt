@@ -570,19 +570,103 @@ COMPLETED
     first three rows. Any drift = debug before moving on to price.
 
 
-IN PROGRESS
------------
-[x] NovelModel full-data training (2026-04-27 18:08 -> in flight as
-    of 2026-04-28 15:32). Job 1873374 array running, eval job
-    1873375 queued with (Dependency) status -- auto-fires the
-    moment training exits and writes
-    slurm_logs/evaluation_NovelModel_out.txt (locale-keyed JSON
-    matching the GRU4Rec / NARM evaluators). Last logged epoch:
-    20, valid_score 0.181200, ~1 hour per epoch, gain
-    decelerating ~0.0002/epoch. Default RecBole stopping_step=10
-    has not started counting (score still rising); convergence
-    expected within 5-15 more epochs, finishes well before the
-    Thursday 2026-04-30 slides deadline.
+DONE 2026-04-29
+---------------
+[x] NovelModel full-data training cancelled at epoch 38 (2026-04-29
+    ~10:00) after gain plateaued. Best validation MRR@100 0.1873 at
+    epoch 38; training had been running ~40 hours, ~1 hour per
+    epoch, gain decelerating from ~0.0005/epoch (epochs 10-20) to
+    ~0.0002/epoch (epochs 30-38). Saved checkpoint
+    saved/NovelModel-Apr-27-2026_18-08-03.pth is the epoch-38 best
+    (RecBole overwrites on each new best save).
+
+[x] NovelModel full-test evaluation completed 2026-04-29 13:08 (job
+    1875059, ~6 minutes). Eight-key JSON in
+    slurm_logs/evaluation_NovelModel_out.txt:
+      Overall (six-locale union): MRR 0.1863, Recall 0.3567, NDCG 0.2216
+      Overall (UK/DE/JP weighted): MRR 0.1799, Recall 0.3433, NDCG 0.2138
+      Per-locale: UK MRR 0.169, DE 0.163, JP 0.213, IT 0.239, FR 0.262, ES 0.245
+    NovelModel beats GRU4Rec on MRR (+0.025) and NDCG (+0.015);
+    GRU4Rec retains the Recall lead by ~0.029.
+
+[x] Two evaluation-time bugs fixed today (both blocked the eval job
+    until resolved):
+      1. scripts/evaluate.py was missing the get_model monkey-patch
+         that scripts/train.py applies. RecBole's get_model uses
+         importlib.find_spec to walk candidate module paths, which
+         triggers recbole.model.exlib_recommender.__init__.py, which
+         unconditionally imports lightgbm at module top. lightgbm is
+         not in amazon-m2-venv, so the eval crashed before reaching
+         the per-locale loop. Fix: replicate train.py's patch
+         (capture _original_get_model, define _patched_get_model
+         that returns NovelModel for that name and delegates
+         otherwise, rebind quick_start.get_model). Six lines added
+         alongside the existing torch.load patch.
+      2. scripts/novel_model.py:22 crashed with TypeError on
+         list(None) because RecBole's checkpoint serialization
+         silently drops custom config keys (attribute_slots wasn't
+         in its built-in schema). config['attribute_slots'] returned
+         None at eval time even though training had populated it
+         from config.yaml. Fix: line 22 now uses `or` short-circuit
+         to fall back to ['title','brand','color','price'] when the
+         lookup returns None. Works for the no-arg checkpoint
+         because that's the slot list it was trained with; ablation
+         checkpoints would still need a proper round-trip via
+         save_other_parameter / load_other_parameter overrides on
+         NovelModel (deferred -- not blocking the slides deadline).
+
+[x] slides/main.tex updated 2026-04-29 to reflect final results:
+      - Overall Test Results table: NovelModel row filled with
+        0.1863 / 0.3567 / 0.2216, \best{} markers redistributed
+        (NovelModel takes MRR + NDCG, GRU4Rec keeps Recall).
+      - Overall Test Results footnote rewritten (no longer says
+        "evaluation pending"; now states the actual finding).
+      - Model comparison plot caption rewritten to explain the
+        two-metric choice (MRR + Recall as the strict / loose
+        endpoints; NDCG sits in the table).
+      - Limitations bullet about "evaluation still finishing"
+        replaced with the more honest "no hyperparameter search"
+        caveat.
+      - NARM frame added between Attribute Construction and
+        NovelModel Architecture (slide 10 in the user-facing
+        numbering). Diagram + K/Q/V comparison to NovelModel's
+        cross-attention; reused as the GRU explanation slot since
+        another student covered GRU4Rec mechanics earlier.
+    Deck rebuilds clean (lualatex x2, exit 0, 25 pages).
+    Pre-existing harmless overfulls survive (\maketitle ~14pt,
+    Overall Test Results dual-table ~1pt) -- documented in README
+    Known Issues, do not affect the rendered PDF.
+
+[x] plots/model_comparison.png and plots/per_locale.png re-rendered
+    2026-04-29 with the actual NovelModel numbers (no more NaN
+    bars). Both scripts read from the slurm log JSON directly, so
+    a single re-run of each picks up the new evaluation_NovelModel
+    log automatically.
+
+RUBRIC STATUS
+-------------
+Per Final project instruction.pdf graduate-student criteria
+(Novelty 20% / Implementation 30% / Experiments 30% / Presentation
+20%, minimum 2 existing methods compared):
+
+  Novelty         done -- NovelModel cross-attention over attribute
+                          bag (title/brand/color/price); custom
+                          SequentialRecommender subclass.
+  Implementation  done -- preprocessing -> training -> eval ->
+                          plotting -> slot-toggle ablation hook.
+  Experiments     done -- 4 models, 6 locales, 3 metrics, 2 Overall
+                          aggregations (six-locale + paper-parity
+                          UK/DE/JP weighted), test-set numbers, no
+                          leakage.
+  Presentation    done -- 25-slide Beamer deck, NovelModel results
+                          filled in, NARM walkthrough slide, paper
+                          comparison.
+  Baselines gate  done -- Pop + GRU4Rec + NARM = 3 existing methods
+                          (exceeds minimum of 2; hits "ideal" 2-3).
+
+Writeup not listed in the rubric PDF -- separate course
+deliverable per memory ("paper later"). Confirm scope with the
+instructor before starting it.
 
 CODE-COMPLETE 2026-04-28
 ------------------------

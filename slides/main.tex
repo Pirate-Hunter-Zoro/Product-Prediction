@@ -328,6 +328,59 @@ valid_metric: MRR@100
   \end{block}
 \end{frame}
 
+\begin{frame}{NARM: Two GRUs with Attention (Li et al., 2017)}
+  \begin{center}
+  \resizebox{0.95\textwidth}{!}{%
+  \begin{tikzpicture}[
+      node distance=0.4cm and 0.55cm,
+      box/.style={draw=tuBlue!55, fill=tuBlue!5, rounded corners=2pt,
+                  minimum height=0.72cm, align=center, font=\scriptsize},
+      attn/.style={draw=tuGold!70!black, fill=tuGold!10, rounded corners=2pt,
+                  minimum height=0.72cm, align=center, font=\scriptsize},
+      arrow/.style={-{Latex[length=2mm]}, thick, draw=tuBlue!80}
+    ]
+    \node[box, minimum width=1.9cm] (seq) {Item-id\\sequence};
+    \node[box, minimum width=1.9cm, above right=-0.05cm and 0.55cm of seq] (gG) {GRU\textsubscript{global}};
+    \node[box, minimum width=1.9cm, below right=-0.05cm and 0.55cm of seq] (gL) {GRU\textsubscript{local}};
+    \node[box, minimum width=2.3cm, right=of gG] (cg) {Last hidden\\$c^g \in \mathbb{R}^{H}$};
+    \node[box, minimum width=2.7cm, right=of gL] (stack) {Stack hidden states\\$h_1^l, \dots, h_t^l$};
+    \node[attn, minimum width=2.7cm, right=of stack] (att) {Additive attention\\query $= h_t^l$\\$\to c^l \in \mathbb{R}^{H}$};
+    \node[box, minimum width=2.0cm, right=of cg, xshift=2.6cm] (concat) {Concat\\$[c^g;\, c^l] \in \mathbb{R}^{2H}$};
+    \node[box, minimum width=2.7cm, right=of concat] (score) {$B \cdot c \in \mathbb{R}^{H}$\\dot with item embeddings};
+
+    \draw[arrow] (seq.east) -- (gG.west);
+    \draw[arrow] (seq.east) -- (gL.west);
+    \draw[arrow] (gG) -- (cg);
+    \draw[arrow] (gL) -- (stack);
+    \draw[arrow] (stack) -- (att);
+    \draw[arrow] (cg.east) -- (concat.west);
+    \draw[arrow] (att.east) -| (concat.south);
+    \draw[arrow] (concat) -- (score);
+  \end{tikzpicture}%
+  }
+  \end{center}
+
+  \vspace{-0.2em}
+  \begin{columns}[T,onlytextwidth]
+    \column{0.50\textwidth}
+      \scriptsize
+      \begin{itemize}\setlength\itemsep{0.1em}
+        \item Two GRUs over the same item embeddings.
+        \item Global side: last hidden state only.
+        \item Local side: stack of hidden states fed to an attention block, query $= h_t^l$.
+        \item Project $[c^g;\, c^l]$ through $B \in \mathbb{R}^{H \times 2H}$; dot with every item embedding.
+      \end{itemize}
+
+    \column{0.46\textwidth}
+      \scriptsize\textbf{Attention vs.\ NovelModel (next slide)}
+      \begin{itemize}\setlength\itemsep{0.1em}
+        \item NARM: $Q = h_t^l$;\; $K = V$ = stacked GRU states.
+        \item Ours: $Q$ = session state;\; $K = V$ = stacked attribute bag.
+        \item Same K=V; NARM additive, ours scaled dot-product.
+      \end{itemize}
+  \end{columns}
+\end{frame}
+
 \begin{frame}{NovelModel Architecture}
   \begin{center}
   \resizebox{0.95\textwidth}{!}{%
@@ -461,8 +514,8 @@ def forward(self, item_seq, item_seq_len):
     \midrule
     Popularity & 0.0001 & 0.0018 & 0.0004 \\
     NARM       & 0.1522 & 0.3637 & 0.1951 \\
-    GRU4Rec    & \best{0.1609} & \best{0.3852} & \best{0.2061} \\
-    NovelModel & \multicolumn{3}{c}{full test evaluation pending} \\
+    GRU4Rec    & 0.1609 & \best{0.3852} & 0.2061 \\
+    NovelModel & \best{0.1863} & 0.3567 & \best{0.2216} \\
     \bottomrule
   \end{tabular}
   \end{center}
@@ -484,7 +537,7 @@ def forward(self, item_seq, item_seq_len):
   \end{center}
 
   \vspace{0.4em}
-  \footnotesize The two ``Overall'' columns live in different universes: ours unions all six locales, the paper's unions only UK/DE/JP. NovelModel full-data evaluation was still pending on April 28, 2026 (validation MRR@100 \(\approx 0.181\) at epoch 20).
+  \footnotesize The two ``Overall'' columns live in different universes: ours unions all six locales, the paper's unions only UK/DE/JP. NovelModel beats both deep baselines on MRR and NDCG; GRU4Rec retains the Recall lead by ${\sim}3$ points.
 \end{frame}
 
 \begin{frame}{Model Comparison Plot}
@@ -493,7 +546,7 @@ def forward(self, item_seq, item_seq_len):
   \end{center}
 
   \vspace{-0.4em}
-  \footnotesize The plot script leaves NovelModel as a blank/NaN bar until \code{slurm\_logs/evaluation\_NovelModel\_out.txt} exists.
+  \footnotesize Two metrics shown (MRR@100 and Recall@100) — the strictest rank-sensitive metric and the loosest hit-rate metric. NDCG@100 sits between them; numerical values appear in the previous table.
 \end{frame}
 
 \begin{frame}{Per-Locale Behavior}
@@ -522,7 +575,7 @@ def forward(self, item_seq, item_seq_len):
     \begin{itemize}\setlength\itemsep{0.3em}
       \item Our six-locale ``Overall'' $\ne$ the paper's UK/DE/JP-only ``Overall'' --- different universes; both reported with scope labels.
       \item GRU4Rec sits ${\sim}10\text{--}12\%$ behind paper Table 3 GRU4Rec++ on the UK/DE/JP-weighted row --- seeded-split + augmentation gap, not a bug.
-      \item NovelModel full-test evaluation was still finishing at slide-cut: validation MRR@100 ${\approx}\,0.181$ at epoch 20.
+      \item NovelModel was trained without a hyperparameter search; numbers reflect a single configuration (\code{hidden\_size=128}, 4 attention heads, full slot list).
       \item Paper Popularity (MRR 0.2426) is unreproducible: their protocol's definition of ``most popular'' differs from ours (per-locale vocabulary, leave-one-out test, or the official KDD Cup test set), but the release does not spell out which.
     \end{itemize}
   \end{block}

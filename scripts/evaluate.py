@@ -1,21 +1,32 @@
 import torch
 import json
 from pathlib import Path
-from recbole.quick_start import load_data_and_model
-from recbole.utils import get_trainer
 import argparse
 import pandas as pd
-from recbole.data.dataloader import FullSortEvalDataLoader
-from recbole.data.interaction import Interaction
 import copy
 
-_original_load = torch.load
+from recbole.quick_start import load_data_and_model
+from recbole.utils import get_trainer
+from recbole.data.dataloader import FullSortEvalDataLoader
+from recbole.data.interaction import Interaction
+import recbole.quick_start.quick_start as quick_start
 
+from novel_model import NovelModel
+
+# Monkey patch torch.load
+_original_load = torch.load
 def _patched_load(*args, **kwargs):
     kwargs.setdefault("weights_only", False)
     return _original_load(*args, **kwargs)
-
 torch.load = _patched_load
+
+# Monkey patch quick_start
+_original_get_model = quick_start.get_model
+def _patched_get_model(model_name):
+    if model_name=="NovelModel":
+        return NovelModel
+    return _original_get_model(model_name)
+quick_start.get_model = _patched_get_model 
 
 def evaluate_per_locale(
     model_file: Path, 

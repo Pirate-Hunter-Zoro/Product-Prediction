@@ -19,7 +19,8 @@ class NovelModel(SequentialRecommender):
         super().__init__(config, dataset)
         self.n_price_bins = config["n_price_bins"]
         self.hidden_size = config["hidden_size"]
-        self.active_item_attributes = list(config['attribute_slots'])
+        # Attributes defined literally if not specified in config
+        self.active_item_attributes = list(config['attribute_slots'] or ['title', 'brand', 'color', 'price'])
         if not (set(self.active_item_attributes) <= ATTRIBUTES):
             raise ValueError(f"Expected attributes to be a subset of {str(ATTRIBUTES)} - fix config.yaml")
         if "title" not in self.active_item_attributes:
