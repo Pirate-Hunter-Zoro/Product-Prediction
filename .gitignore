@@ -18,3 +18,5 @@ plots/
 *.out
 *.synctex.gz
 *.vrb
+# live tutoring board (Tutor-Board) — scratch space, never tracked
+live/
